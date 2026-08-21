@@ -160,7 +160,129 @@ func (s *Store) Snapshot(ctx context.Context, planID string) (board.Snapshot, er
 	if err != nil {
 		return board.Snapshot{}, err
 	}
-	return board.BuildSnapshot(*plan, cols, lanes, items), nil
+	links, err := s.Links(ctx, planID)
+	if err != nil {
+		return board.Snapshot{}, err
+	}
+	return board.BuildSnapshot(*plan, cols, lanes, items, links), nil
+}
+
+// ItemDetail assembles the full click-through detail for one item: the item,
+// its bidirectional dependency refs, and (via readFile) its spec/plan content.
+// readFile may be nil (content omitted) — it resolves a stored ref path to bytes.
+func (s *Store) ItemDetail(ctx context.Context, planID, itemID string, readFile func(ref string) string) (board.ItemDetail, error) {
+	it, err := s.getItem(ctx, itemID)
+	if err != nil {
+		return board.ItemDetail{}, err
+	}
+	labels, err := s.itemLabels(ctx, itemID)
+	if err != nil {
+		return board.ItemDetail{}, err
+	}
+	it.Labels = labels
+	d := board.ItemDetail{Item: *it}
+
+	if readFile != nil {
+		if it.SpecRef != "" {
+			d.SpecContent = readFile(it.SpecRef)
+		}
+	}
+
+	// refFor resolves an item id to a lightweight ref. Called AFTER all cursors are
+	// closed — the pool is MaxOpenConns(1), so querying while a rows cursor is open
+	// would deadlock.
+	refFor := func(id string) board.LinkedRef {
+		ref := board.LinkedRef{ID: id}
+		var extKey sql.NullString
+		s.db.QueryRowContext(ctx, `SELECT title, column_key, ext_key FROM item WHERE id=?`, id).
+			Scan(&ref.Title, &ref.Column, &extKey)
+		ref.ExtKey = extKey.String
+		return ref
+	}
+
+	// Collect link endpoints first (drain and close cursors before any refFor).
+	type edge struct{ id, kind string }
+	var outgoing, incoming []edge
+	if err := func() error {
+		rows, err := s.db.QueryContext(ctx, `SELECT to_item, kind FROM link WHERE from_item=?`, itemID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var e edge
+			if err := rows.Scan(&e.id, &e.kind); err != nil {
+				return err
+			}
+			outgoing = append(outgoing, e)
+		}
+		return rows.Err()
+	}(); err != nil {
+		return board.ItemDetail{}, err
+	}
+	if err := func() error {
+		rows, err := s.db.QueryContext(ctx, `SELECT from_item, kind FROM link WHERE to_item=?`, itemID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var e edge
+			if err := rows.Scan(&e.id, &e.kind); err != nil {
+				return err
+			}
+			incoming = append(incoming, e)
+		}
+		return rows.Err()
+	}(); err != nil {
+		return board.ItemDetail{}, err
+	}
+
+	for _, e := range outgoing {
+		switch e.kind {
+		case "depends_on":
+			d.DependsOn = append(d.DependsOn, refFor(e.id))
+		case "related", "discovered_from":
+			d.Related = append(d.Related, refFor(e.id))
+		}
+	}
+	for _, e := range incoming {
+		if e.kind == "depends_on" {
+			d.DependedBy = append(d.DependedBy, refFor(e.id))
+		}
+	}
+	return d, nil
+}
+
+// Links returns all dependency links for a plan.
+func (s *Store) Links(ctx context.Context, planID string) ([]board.Link, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT from_item, to_item, kind FROM link WHERE plan_id=?`, planID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []board.Link
+	for rows.Next() {
+		var l board.Link
+		if err := rows.Scan(&l.From, &l.To, &l.Kind); err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+// AddLink records a dependency (idempotent). Silently ignores a link whose
+// endpoints don't both exist yet.
+func (s *Store) AddLink(ctx context.Context, planID, fromID, toID, kind string) error {
+	if fromID == "" || toID == "" || fromID == toID {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO link(plan_id, from_item, to_item, kind) VALUES(?,?,?,?)`,
+		planID, fromID, toID, kind)
+	return err
 }
 
 // Profile reconstructs the active board.Profile for a plan from persisted state

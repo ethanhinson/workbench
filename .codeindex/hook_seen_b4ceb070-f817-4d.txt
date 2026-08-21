@@ -5,3 +5,11 @@ UpsertByExtKey
 ItemIDByExtKey
 ListItems
 Open
+ColumnFor
+Snapshot
+BuildSnapshot
+Sync
+AddLink
+Handler
+ItemDetail
+Links

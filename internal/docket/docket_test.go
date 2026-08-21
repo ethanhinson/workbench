@@ -151,18 +151,26 @@ func TestSyncIdempotentAndNested(t *testing.T) {
 		t.Fatalf("re-sync duplicated items: got %d want 3", len(items2))
 	}
 
-	// #74 discovered_from [63] and 63 is imported => nested under it.
-	var c74 *board.Item
-	for i := range items2 {
-		if items2[i].ExtKey == "docket:74" {
-			c74 = &items2[i]
-		}
-	}
-	if c74 == nil {
+	// #74 depends_on [63] and discovered_from [63] => a link (not nesting).
+	from, ok := st.ItemIDByExtKey(ctx, plan.ID, "docket:74")
+	if !ok {
 		t.Fatal("missing docket:74 item")
 	}
-	parentID, ok := st.ItemIDByExtKey(ctx, plan.ID, "docket:63")
-	if !ok || c74.ParentID != parentID {
-		t.Fatalf("#74 not nested under #63: parent=%q", c74.ParentID)
+	to, ok := st.ItemIDByExtKey(ctx, plan.ID, "docket:63")
+	if !ok {
+		t.Fatal("missing docket:63 item")
+	}
+	links, err := st.Links(ctx, plan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hasDep bool
+	for _, l := range links {
+		if l.From == from && l.To == to && l.Kind == "depends_on" {
+			hasDep = true
+		}
+	}
+	if !hasDep {
+		t.Fatalf("#74 should have a depends_on link to #63; links=%+v", links)
 	}
 }

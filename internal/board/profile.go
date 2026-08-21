@@ -198,12 +198,13 @@ func kanbanProfile() Profile {
 func docketProfile() Profile {
 	cols := []ColumnDef{
 		{Key: "backlog", Name: "Backlog", Position: 0},          // proposed + needs-brainstorm
-		{Key: "specd", Name: "Build-Ready", Position: 1},        // proposed + build-ready (spec/plan present)
-		{Key: "in_progress", Name: "In Progress", Position: 2},  // has a branch/PR, not merged
-		{Key: "review", Name: "In Review", Position: 3},         // PR open / implemented
-		{Key: "done", Name: "Done", Position: 4, IsDone: true},  // merged/archived
-		{Key: "deferred", Name: "Deferred", Position: 5},        // deferred
-		{Key: "killed", Name: "Killed", Position: 6, IsDone: true},
+		{Key: "specifying", Name: "Specifying", Position: 1},    // brainstorm in progress (spec draft)
+		{Key: "specd", Name: "Build-Ready", Position: 2},        // proposed + build-ready (spec/plan present)
+		{Key: "in_progress", Name: "In Progress", Position: 3},  // has a branch/PR, not merged
+		{Key: "review", Name: "In Review", Position: 4},         // PR open / implemented
+		{Key: "done", Name: "Done", Position: 5, IsDone: true},  // merged/archived
+		{Key: "deferred", Name: "Deferred", Position: 6},        // deferred
+		{Key: "killed", Name: "Killed", Position: 7, IsDone: true},
 	}
 	return Profile{
 		Key:           "docket",

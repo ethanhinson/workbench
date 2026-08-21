@@ -10,6 +10,9 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/ethanhinson/kanban-mcp/internal/store"
 )
@@ -19,12 +22,20 @@ var staticFS embed.FS
 
 // Server serves the board API + reference SPA for a single plan.
 type Server struct {
-	st     *store.Store
-	planID string
+	st       *store.Store
+	planID   string
+	repoRoot string // base dir for resolving spec/plan ref paths (docket repo); may be ""
 }
 
 func NewServer(st *store.Store, planID string) *Server {
 	return &Server{st: st, planID: planID}
+}
+
+// WithRepoRoot sets the base directory used to resolve an item's spec_ref/plan
+// path to file content in the detail endpoint.
+func (s *Server) WithRepoRoot(root string) *Server {
+	s.repoRoot = root
+	return s
 }
 
 // Handler returns the HTTP handler. Routes:
@@ -41,6 +52,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("/api/board", s.handleBoard)
 	mux.HandleFunc("/api/stream", s.handleStream)
+	mux.HandleFunc("/api/item/", s.handleItem)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
@@ -55,6 +67,43 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, snap)
+}
+
+// handleItem returns the full detail for one card, including rendered spec/plan
+// content (resolved under repoRoot) and bidirectional dependency refs.
+func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/item/")
+	if id == "" {
+		http.Error(w, "missing item id", http.StatusBadRequest)
+		return
+	}
+	detail, err := s.st.ItemDetail(r.Context(), s.planID, id, s.readRef)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	writeJSON(w, detail)
+}
+
+// readRef resolves a stored spec/plan ref path to file content under repoRoot.
+// It refuses paths escaping the root and caps size. Returns "" on any failure.
+func (s *Server) readRef(ref string) string {
+	if s.repoRoot == "" || ref == "" {
+		return ""
+	}
+	clean := filepath.Clean("/" + ref) // strip leading .. traversal
+	full := filepath.Join(s.repoRoot, clean)
+	if !strings.HasPrefix(full, filepath.Clean(s.repoRoot)) {
+		return ""
+	}
+	b, err := os.ReadFile(full)
+	if err != nil {
+		return ""
+	}
+	if len(b) > 256*1024 {
+		b = b[:256*1024]
+	}
+	return string(b)
 }
 
 // handleStream is a Server-Sent Events endpoint that pushes a fresh board

@@ -20,6 +20,7 @@ func NewSyncer(st *store.Store, planID string) *Syncer { return &Syncer{st: st, 
 type Result struct {
 	Changes int
 	Lanes   int
+	Links   int
 }
 
 // Sync reads the docket docs directory and upserts every change as a board item.
@@ -47,36 +48,41 @@ func (s *Syncer) Sync(ctx context.Context, docsDir string) (Result, error) {
 		laneCount++
 	}
 
-	// Second pass: upsert all items (without parents) so ext keys exist...
+	// Second pass: upsert all items so ext keys exist (flat — no parent nesting).
 	for _, c := range changes {
-		if _, err := s.upsert(ctx, c, ""); err != nil {
-			return Result{}, err
-		}
-	}
-	// Third pass: set parent links now that all cards exist.
-	for _, c := range changes {
-		parentExt := parentOf(c, changes)
-		if parentExt == "" {
-			continue
-		}
-		if _, ok := s.st.ItemIDByExtKey(ctx, s.planID, parentExt); !ok {
-			continue
-		}
-		if _, err := s.upsert(ctx, c, parentExt); err != nil {
+		if _, err := s.upsert(ctx, c); err != nil {
 			return Result{}, err
 		}
 	}
 
-	return Result{Changes: len(changes), Lanes: laneCount}, nil
+	// Third pass: record dependency links now that every card exists. Flat board
+	// shows these as links instead of containment.
+	linkCount := 0
+	addLink := func(fromID string, toIDs []int, kind string) {
+		for _, n := range toIDs {
+			toID, ok := s.st.ItemIDByExtKey(ctx, s.planID, fmt.Sprintf("docket:%d", n))
+			if !ok {
+				continue
+			}
+			if err := s.st.AddLink(ctx, s.planID, fromID, toID, kind); err == nil {
+				linkCount++
+			}
+		}
+	}
+	for _, c := range changes {
+		fromID, ok := s.st.ItemIDByExtKey(ctx, s.planID, fmt.Sprintf("docket:%d", c.ID))
+		if !ok {
+			continue
+		}
+		addLink(fromID, c.DependsOn, "depends_on")
+		addLink(fromID, c.DiscoveredFrom, "discovered_from")
+		addLink(fromID, c.Related, "related")
+	}
+
+	return Result{Changes: len(changes), Lanes: laneCount, Links: linkCount}, nil
 }
 
-func (s *Syncer) upsert(ctx context.Context, c Change, parentExt string) (*board.Item, error) {
-	var parentID string
-	if parentExt != "" {
-		if id, ok := s.st.ItemIDByExtKey(ctx, s.planID, parentExt); ok {
-			parentID = id
-		}
-	}
+func (s *Syncer) upsert(ctx context.Context, c Change) (*board.Item, error) {
 	blocked := c.BlockedBy != ""
 	reason := ""
 	if blocked {
@@ -84,7 +90,6 @@ func (s *Syncer) upsert(ctx context.Context, c Change, parentExt string) (*board
 	}
 	it := &board.Item{
 		PlanID:        s.planID,
-		ParentID:      parentID,
 		Kind:          kindFor(c),
 		Title:         fmt.Sprintf("#%d %s", c.ID, c.Title),
 		ColumnKey:     c.ColumnFor(),
@@ -107,22 +112,4 @@ func kindFor(c Change) board.Kind {
 		return board.KindBug
 	}
 	return board.KindStory
-}
-
-// parentOf returns the ext-key of a change's parent for nesting: the single
-// docket change it was discovered_from (preferred) or depends_on, if that parent
-// is itself in the imported set.
-func parentOf(c Change, all []Change) string {
-	inSet := map[int]bool{}
-	for _, x := range all {
-		inSet[x.ID] = true
-	}
-	cands := c.DiscoveredFrom
-	if len(cands) == 0 {
-		cands = c.DependsOn
-	}
-	if len(cands) == 1 && inSet[cands[0]] && cands[0] != c.ID {
-		return fmt.Sprintf("docket:%d", cands[0])
-	}
-	return ""
 }

@@ -160,6 +160,17 @@ type Item struct {
 	Labels        []Label    `json:"labels,omitempty"`
 	CreatedAt     string     `json:"created_at"`
 	UpdatedAt     string     `json:"updated_at"`
+
+	// Views holds this item's placement per view (keyed by ViewKind), computed at
+	// snapshot time so renderers don't reimplement the taxonomy. Views where the
+	// item is hidden are omitted.
+	Views map[string]ItemPlacement `json:"views,omitempty"`
+}
+
+// ItemPlacement is an item's (lane, column) cell within one view.
+type ItemPlacement struct {
+	Lane   string `json:"lane"`
+	Column string `json:"column"`
 }
 
 // Lane is a configurable swim lane; default one per agent.

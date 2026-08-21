@@ -33,6 +33,7 @@ type Change struct {
 	Trivial        bool
 	DependsOn      []int
 	DiscoveredFrom []int
+	Related        []int
 	ADRs           []int
 	Path           string
 }
@@ -112,6 +113,7 @@ func parseChange(path string) (Change, bool, error) {
 		Trivial:        fields["trivial"] == "true",
 		DependsOn:      parseIntList(fields["depends_on"]),
 		DiscoveredFrom: parseIntList(fields["discovered_from"]),
+		Related:        parseIntList(fields["related"]),
 		ADRs:           parseIntList(fields["adrs"]),
 		Path:           path,
 	}
@@ -156,6 +158,8 @@ func (c Change) ColumnFor() string {
 			return "in_progress"
 		case c.BuildReady():
 			return "specd"
+		case c.Spec != "": // spec drafted but not yet build-ready (no plan)
+			return "specifying"
 		default:
 			return "backlog"
 		}

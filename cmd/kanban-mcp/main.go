@@ -28,6 +28,7 @@ func main() {
 		vizOnly = flag.Bool("viz-only", false, "run only the viz HTTP server (no MCP stdio) for browsing a board")
 		docketSync = flag.String("docket-sync", "", "import a docket docs dir into the plan, then exit (e.g. /repo/.docket/docs)")
 		tuiURL = flag.String("tui", "", "run the terminal UI against an SSE stream URL (e.g. http://localhost:7777/api/stream) and exit")
+		repoRoot = flag.String("repo-root", envOr("KANBAN_REPO_ROOT", ""), "base dir for resolving spec/plan paths in card detail (e.g. the docket repo)")
 	)
 	flag.Parse()
 
@@ -74,13 +75,13 @@ func main() {
 			addr = ":7777"
 		}
 		log.Printf("kanban-mcp viz-only on http://localhost%s (plan %q)", addr, *plan)
-		if err := viz.NewServer(st, mcpSrv.PlanID()).Serve(ctx, addr); err != nil {
+		if err := viz.NewServer(st, mcpSrv.PlanID()).WithRepoRoot(*repoRoot).Serve(ctx, addr); err != nil {
 			log.Fatalf("viz: %v", err)
 		}
 		return
 	}
 	if *httpAddr != "" {
-		vzn := viz.NewServer(st, mcpSrv.PlanID())
+		vzn := viz.NewServer(st, mcpSrv.PlanID()).WithRepoRoot(*repoRoot)
 		go func() {
 			log.Printf("kanban-mcp viz on http://localhost%s", *httpAddr)
 			if err := vzn.Serve(ctx, *httpAddr); err != nil {

@@ -76,6 +76,19 @@ CREATE TABLE IF NOT EXISTS label (
     PRIMARY KEY (item_id, ns, value)
 );
 
+-- First-class dependency links between items (flat board shows these instead of
+-- containment). kind: depends_on | related | discovered_from. Direction: from
+-- depends on / relates to / was discovered from `to`.
+CREATE TABLE IF NOT EXISTS link (
+    plan_id   TEXT NOT NULL REFERENCES plan(id) ON DELETE CASCADE,
+    from_item TEXT NOT NULL REFERENCES item(id) ON DELETE CASCADE,
+    to_item   TEXT NOT NULL REFERENCES item(id) ON DELETE CASCADE,
+    kind      TEXT NOT NULL,
+    PRIMARY KEY (from_item, to_item, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_link_from ON link(from_item);
+CREATE INDEX IF NOT EXISTS idx_link_to   ON link(to_item);
+
 -- Append-only activity log per item, so an agent can reconstruct "what's discussed".
 CREATE TABLE IF NOT EXISTS event (
     id        TEXT PRIMARY KEY,
