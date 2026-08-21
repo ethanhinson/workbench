@@ -77,7 +77,7 @@
 <script>
 const $ = (s) => document.querySelector(s);
 const detail = $("#detail");
-let AUTO = true, timer = null;
+let AUTO = true;
 
 function specBadge(s) { return `<span class="badge spec-${s}">spec:${s}</span>`; }
 
@@ -179,11 +179,24 @@ async function load() {
   } catch (e) { $("#board").innerHTML = `<div class="empty">error: ${e}</div>`; }
 }
 
-function schedule(){ clearInterval(timer); if(AUTO) timer=setInterval(load, 3000); }
+// Live updates over SSE: the server pushes a fresh snapshot on every store
+// mutation (no polling). EventSource auto-reconnects on drop. The "auto" toggle
+// opens/closes the stream; when off we fall back to manual refresh.
+let es = null;
+function connect() {
+  if (es) { es.close(); es = null; }
+  if (!AUTO) return;
+  es = new EventSource("/api/stream");
+  es.addEventListener("board", (ev) => {
+    try { render(JSON.parse(ev.data)); } catch (e) {}
+  });
+  es.onerror = () => { /* EventSource retries automatically */ };
+}
+
 $("#refresh").onclick = load;
-$("#auto").onchange = (e)=>{ AUTO=e.target.checked; schedule(); };
+$("#auto").onchange = (e)=>{ AUTO=e.target.checked; connect(); if(!AUTO) load(); };
 $("#lane-filter").onchange = ()=> window.__snap && render(window.__snap);
-load(); schedule();
+load(); connect();
 </script>
 </body>
 </html>

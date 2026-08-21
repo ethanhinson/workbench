@@ -40,6 +40,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/", http.FileServer(http.FS(sub)))
 
 	mux.HandleFunc("/api/board", s.handleBoard)
+	mux.HandleFunc("/api/stream", s.handleStream)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
@@ -54,6 +55,62 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, snap)
+}
+
+// handleStream is a Server-Sent Events endpoint that pushes a fresh board
+// Snapshot on every store mutation (and once on connect). Both the browser SPA
+// (EventSource) and the TUI (an HTTP SSE reader) consume this single stream, so
+// there is one push path with two renderers. Read-only: no client->server frames,
+// which is why SSE fits better than WebSockets here.
+func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	changes, unsub := s.st.Broker().Subscribe()
+	defer unsub()
+
+	send := func() bool {
+		snap, err := s.st.Snapshot(r.Context(), s.planID)
+		if err != nil {
+			return false
+		}
+		b, err := json.Marshal(snap)
+		if err != nil {
+			return false
+		}
+		// SSE frame: one "data:" line (compact JSON, no embedded newlines) + blank line.
+		if _, err := w.Write([]byte("event: board\ndata: ")); err != nil {
+			return false
+		}
+		if _, err := w.Write(b); err != nil {
+			return false
+		}
+		if _, err := w.Write([]byte("\n\n")); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+
+	if !send() { // initial frame so a new client renders immediately
+		return
+	}
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case _, ok := <-changes:
+			if !ok || !send() {
+				return
+			}
+		}
+	}
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

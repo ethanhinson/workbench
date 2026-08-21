@@ -13,6 +13,7 @@ import (
 	"github.com/ethanhinson/kanban-mcp/internal/docket"
 	"github.com/ethanhinson/kanban-mcp/internal/mcpserver"
 	"github.com/ethanhinson/kanban-mcp/internal/store"
+	"github.com/ethanhinson/kanban-mcp/internal/tui"
 	"github.com/ethanhinson/kanban-mcp/internal/viz"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -26,8 +27,18 @@ func main() {
 		httpAddr = flag.String("http", envOr("KANBAN_HTTP", ""), "serve the viz UI + JSON board API on this addr (e.g. :7777); empty disables")
 		vizOnly = flag.Bool("viz-only", false, "run only the viz HTTP server (no MCP stdio) for browsing a board")
 		docketSync = flag.String("docket-sync", "", "import a docket docs dir into the plan, then exit (e.g. /repo/.docket/docs)")
+		tuiURL = flag.String("tui", "", "run the terminal UI against an SSE stream URL (e.g. http://localhost:7777/api/stream) and exit")
 	)
 	flag.Parse()
+
+	// TUI is a pure SSE client — it needs no local store or MCP server, so it can
+	// point at any served board (local or remote).
+	if *tuiURL != "" {
+		if err := tui.Run(*tuiURL); err != nil {
+			log.Fatalf("tui: %v", err)
+		}
+		return
+	}
 
 	abs, err := filepath.Abs(*dbPath)
 	if err != nil {

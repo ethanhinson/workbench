@@ -21,7 +21,8 @@ var schemaSQL string
 
 // Store wraps the SQLite connection.
 type Store struct {
-	db *sql.DB
+	db     *sql.DB
+	broker *Broker
 }
 
 // Open opens (creating if needed) the plan database at path and applies the schema.
@@ -36,7 +37,22 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, broker: newBroker()}, nil
+}
+
+// Broker returns the store's change-notification broker. Consumers (the SSE
+// handler, a local TUI) Subscribe to be woken on every mutation.
+func (s *Store) Broker() *Broker { return s.broker }
+
+// commit commits the transaction and, on success, notifies subscribers that the
+// board changed. All mutating methods route their commit through here so the
+// live-update signal can never be forgotten.
+func (s *Store) commit(tx *sql.Tx) error {
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.broker.notify()
+	return nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -310,7 +326,7 @@ func (s *Store) CreateItem(ctx context.Context, agentID string, it *board.Item) 
 		fmt.Sprintf("%s %q in %s", it.Kind, it.Title, it.ColumnKey)); err != nil {
 		return nil, err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := s.commit(tx); err != nil {
 		return nil, err
 	}
 	return it, nil
@@ -379,7 +395,7 @@ func (s *Store) UpsertByExtKey(ctx context.Context, agentID string, it *board.It
 	if err := replaceLabelsTx(ctx, tx, it.ID, it.Labels); err != nil {
 		return nil, err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := s.commit(tx); err != nil {
 		return nil, err
 	}
 	return it, nil
@@ -455,7 +471,7 @@ func (s *Store) MoveItem(ctx context.Context, agentID, itemID, toColumn, toLane 
 	if err := logEventTx(ctx, tx, planID, itemID, agentID, "moved", "-> "+toColumn); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return s.commit(tx)
 }
 
 func (s *Store) checkWIP(ctx context.Context, planID, columnKey string) error {
@@ -539,7 +555,7 @@ func (s *Store) SetBlocked(ctx context.Context, agentID, itemID string, blocked 
 	if err := logEventTx(ctx, tx, planID, itemID, agentID, kind, reason); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return s.commit(tx)
 }
 
 // SetSpec updates the spec reference/status (the SDD heartbeat).
@@ -565,7 +581,7 @@ func (s *Store) SetSpec(ctx context.Context, agentID, itemID, specRef string, st
 		fmt.Sprintf("%s (%s)", specRef, status)); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return s.commit(tx)
 }
 
 // AddLabels validates and adds labels to an item (idempotent).
@@ -598,7 +614,7 @@ func (s *Store) AddLabels(ctx context.Context, agentID, itemID string, labels []
 	if err := logEventTx(ctx, tx, planID, itemID, agentID, "labeled", labelsString(labels)); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return s.commit(tx)
 }
 
 // AddComment appends a comment event to an item.

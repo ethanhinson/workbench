@@ -72,8 +72,32 @@ the seam — the bundled SPA, an on-demand generated component, a TUI, or a stat
 export all consume the same shape.
 
 - **`GET /api/board`** — the Snapshot contract (CORS-open, so external renderers can fetch it).
-- **`GET /`** — a zero-build reference SPA (server-side embedded, vanilla JS, auto-refresh).
+- **`GET /api/stream`** — the same Snapshot pushed over **SSE** on every store mutation (no polling).
+- **`GET /`** — a zero-build reference SPA (embedded, vanilla JS, live over SSE via `EventSource`).
 - **MCP `board_export`** — hands an agent the same Snapshot, to drive on-demand UI generation.
+
+### Live updates: SSE, one push path, many renderers
+
+Every store mutation bumps a revision on an in-process broker; `GET /api/stream`
+turns that into Server-Sent Events. The board is **read-only from the UI's side**
+(the agent writes through MCP), so SSE — server→client push over plain HTTP with
+auto-reconnect — is the right fit; WebSockets would add a duplex channel nothing
+uses. The browser SPA and the terminal TUI both consume this one stream.
+
+### Terminal UI (TUI)
+
+A bubbletea TUI renders the board in the terminal as a **thin SSE client** — it
+runs against any served board, local or remote, and needs no local store:
+
+```sh
+# in one shell: serve a board
+kanban-mcp --db ./runbook.db --plan "Runbook" --viz-only --http :7777
+# in another: watch it live in the terminal
+kanban-mcp --tui http://localhost:7777/api/stream
+```
+
+Columns × swim lanes with per-cell counts and top items; `←/→` focuses a lane,
+`q` quits. It live-updates the instant an agent moves a card.
 
 ```sh
 # browse a board (no agent needed)
