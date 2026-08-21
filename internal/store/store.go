@@ -316,6 +316,85 @@ func (s *Store) CreateItem(ctx context.Context, agentID string, it *board.Item) 
 	return it, nil
 }
 
+// UpsertByExtKey inserts or updates an item keyed by (plan_id, ext_key). Used by
+// importers (e.g. docket) so re-running a sync updates existing cards in place
+// rather than duplicating them. It bypasses policy gates because the external
+// source is authoritative for the item's state. Labels are fully replaced.
+func (s *Store) UpsertByExtKey(ctx context.Context, agentID string, it *board.Item) (*board.Item, error) {
+	if it.ExtKey == "" {
+		return nil, fmt.Errorf("UpsertByExtKey requires ext_key")
+	}
+	if !it.Kind.Valid() {
+		return nil, fmt.Errorf("invalid kind %q", it.Kind)
+	}
+	if it.SpecStatus == "" {
+		it.SpecStatus = board.SpecMissing
+	}
+	if it.Priority == "" {
+		it.Priority = board.PriorityP2
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var existingID string
+	err = tx.QueryRowContext(ctx, `SELECT id FROM item WHERE plan_id=? AND ext_key=?`, it.PlanID, it.ExtKey).Scan(&existingID)
+	ts := now()
+	var parent, lane any
+	if it.ParentID != "" {
+		parent = it.ParentID
+	}
+	if it.LaneKey != "" {
+		lane = it.LaneKey
+	}
+
+	switch err {
+	case sql.ErrNoRows:
+		it.ID = newID()
+		it.CreatedAt, it.UpdatedAt = ts, ts
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO item(id,plan_id,parent_id,kind,title,body,column_key,lane_key,spec_ref,spec_status,priority,blocked,blocked_reason,position,ext_key,created_at,updated_at)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			it.ID, it.PlanID, parent, it.Kind, it.Title, it.Body, it.ColumnKey, lane,
+			it.SpecRef, it.SpecStatus, it.Priority, boolInt(it.Blocked), it.BlockedReason,
+			it.Position, it.ExtKey, it.CreatedAt, it.UpdatedAt); err != nil {
+			return nil, err
+		}
+	case nil:
+		it.ID = existingID
+		it.UpdatedAt = ts
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE item SET parent_id=?,kind=?,title=?,body=?,column_key=?,lane_key=?,spec_ref=?,spec_status=?,priority=?,blocked=?,blocked_reason=?,updated_at=? WHERE id=?`,
+			parent, it.Kind, it.Title, it.Body, it.ColumnKey, lane, it.SpecRef, it.SpecStatus,
+			it.Priority, boolInt(it.Blocked), it.BlockedReason, it.UpdatedAt, it.ID); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, err
+	}
+
+	if err := replaceLabelsTx(ctx, tx, it.ID, it.Labels); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return it, nil
+}
+
+// ItemIDByExtKey resolves an external key to an internal item id (for parenting).
+func (s *Store) ItemIDByExtKey(ctx context.Context, planID, extKey string) (string, bool) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM item WHERE plan_id=? AND ext_key=?`, planID, extKey).Scan(&id)
+	if err != nil {
+		return "", false
+	}
+	return id, true
+}
+
 // MoveItem changes an item's column (and optionally lane), enforcing WIP limits.
 func (s *Store) MoveItem(ctx context.Context, agentID, itemID, toColumn, toLane string) error {
 	planID, err := s.itemPlan(ctx, itemID)
@@ -422,11 +501,11 @@ func (s *Store) getItem(ctx context.Context, itemID string) (*board.Item, error)
 	var blocked int
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id,plan_id,COALESCE(parent_id,''),kind,title,body,column_key,COALESCE(lane_key,''),
-		        spec_ref,spec_status,priority,blocked,blocked_reason,position,created_at,updated_at
+		        spec_ref,spec_status,priority,blocked,blocked_reason,position,ext_key,created_at,updated_at
 		 FROM item WHERE id=?`, itemID).
 		Scan(&it.ID, &it.PlanID, &it.ParentID, &it.Kind, &it.Title, &it.Body,
 			&it.ColumnKey, &it.LaneKey, &it.SpecRef, &it.SpecStatus, &it.Priority,
-			&blocked, &it.BlockedReason, &it.Position, &it.CreatedAt, &it.UpdatedAt)
+			&blocked, &it.BlockedReason, &it.Position, &it.ExtKey, &it.CreatedAt, &it.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("item %q not found", itemID)
 	}
@@ -542,7 +621,7 @@ type Filter struct {
 
 func (s *Store) ListItems(ctx context.Context, planID string, f Filter) ([]board.Item, error) {
 	q := `SELECT id,plan_id,COALESCE(parent_id,''),kind,title,body,column_key,COALESCE(lane_key,''),
-	             spec_ref,spec_status,priority,blocked,blocked_reason,position,created_at,updated_at
+	             spec_ref,spec_status,priority,blocked,blocked_reason,position,ext_key,created_at,updated_at
 	      FROM item WHERE plan_id=?`
 	args := []any{planID}
 	if f.ColumnKey != "" {
@@ -578,7 +657,7 @@ func (s *Store) ListItems(ctx context.Context, planID string, f Filter) ([]board
 		var blocked int
 		if err := rows.Scan(&it.ID, &it.PlanID, &it.ParentID, &it.Kind, &it.Title, &it.Body,
 			&it.ColumnKey, &it.LaneKey, &it.SpecRef, &it.SpecStatus, &it.Priority,
-			&blocked, &it.BlockedReason, &it.Position, &it.CreatedAt, &it.UpdatedAt); err != nil {
+			&blocked, &it.BlockedReason, &it.Position, &it.ExtKey, &it.CreatedAt, &it.UpdatedAt); err != nil {
 			return nil, err
 		}
 		it.Blocked = blocked == 1

@@ -156,6 +156,7 @@ type Item struct {
 	Blocked       bool       `json:"blocked"`
 	BlockedReason string     `json:"blocked_reason,omitempty"`
 	Position      int        `json:"position"`
+	ExtKey        string     `json:"ext_key,omitempty"` // external source id for idempotent import
 	Labels        []Label    `json:"labels,omitempty"`
 	CreatedAt     string     `json:"created_at"`
 	UpdatedAt     string     `json:"updated_at"`

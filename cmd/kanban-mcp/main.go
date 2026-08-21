@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/ethanhinson/kanban-mcp/internal/docket"
 	"github.com/ethanhinson/kanban-mcp/internal/mcpserver"
 	"github.com/ethanhinson/kanban-mcp/internal/store"
 	"github.com/ethanhinson/kanban-mcp/internal/viz"
@@ -24,6 +25,7 @@ func main() {
 		profile = flag.String("profile", envOr("KANBAN_PROFILE", "sdd"), "methodology profile on first init: sdd|scrum|kanban")
 		httpAddr = flag.String("http", envOr("KANBAN_HTTP", ""), "serve the viz UI + JSON board API on this addr (e.g. :7777); empty disables")
 		vizOnly = flag.Bool("viz-only", false, "run only the viz HTTP server (no MCP stdio) for browsing a board")
+		docketSync = flag.String("docket-sync", "", "import a docket docs dir into the plan, then exit (e.g. /repo/.docket/docs)")
 	)
 	flag.Parse()
 
@@ -41,6 +43,16 @@ func main() {
 	srv, mcpSrv, err := mcpserver.New(ctx, st, *plan, *agent, *profile)
 	if err != nil {
 		log.Fatalf("build server: %v", err)
+	}
+
+	// One-shot docket import: sync the backlog into the plan, then exit.
+	if *docketSync != "" {
+		res, err := docket.NewSyncer(st, mcpSrv.PlanID()).Sync(ctx, *docketSync)
+		if err != nil {
+			log.Fatalf("docket sync: %v", err)
+		}
+		log.Printf("docket sync complete: %d changes into %d type lanes", res.Changes, res.Lanes)
+		return
 	}
 
 	// Viz layer: the JSON board API + reference SPA. Serve it when --http is set,

@@ -110,7 +110,7 @@ func (p Profile) isExempt(laneKey string) bool {
 
 // Profiles returns the built-in methodology presets keyed by Key.
 func Profiles() map[string]Profile {
-	presets := []Profile{sddProfile(), scrumProfile(), kanbanProfile()}
+	presets := []Profile{sddProfile(), scrumProfile(), kanbanProfile(), docketProfile()}
 	m := make(map[string]Profile, len(presets))
 	for _, p := range presets {
 		m[p.Key] = p
@@ -188,6 +188,30 @@ func kanbanProfile() Profile {
 			LaneWIP:     map[string]int{"standard": 5},
 			ExemptLanes: []string{"expedite"}, // the lane influences the workflow: no limits apply
 		},
+	}
+}
+
+// docketProfile mirrors docket's change lifecycle (a change ~= one PR). Columns
+// track docket status x readiness; lanes are the change's type (feat/fix/...),
+// which is the natural swim dimension for a docket backlog. Enforcement is light
+// because docket itself owns the real workflow; kanban-mcp is the pane of glass.
+func docketProfile() Profile {
+	cols := []ColumnDef{
+		{Key: "backlog", Name: "Backlog", Position: 0},          // proposed + needs-brainstorm
+		{Key: "specd", Name: "Build-Ready", Position: 1},        // proposed + build-ready (spec/plan present)
+		{Key: "in_progress", Name: "In Progress", Position: 2},  // has a branch/PR, not merged
+		{Key: "review", Name: "In Review", Position: 3},         // PR open / implemented
+		{Key: "done", Name: "Done", Position: 4, IsDone: true},  // merged/archived
+		{Key: "deferred", Name: "Deferred", Position: 5},        // deferred
+		{Key: "killed", Name: "Killed", Position: 6, IsDone: true},
+	}
+	return Profile{
+		Key:           "docket",
+		Name:          "Docket (imported)",
+		Description:   "Maps a docket backlog (change manifests on the metadata branch) into the kanban board.",
+		LaneDimension: "type", // swim lane = docket change type (feat/fix/chore/...)
+		Columns:       cols,
+		Policies:      Policies{}, // no gates: docket is the source of truth for its own rules
 	}
 }
 

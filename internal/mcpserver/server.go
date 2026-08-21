@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ethanhinson/kanban-mcp/internal/board"
+	"github.com/ethanhinson/kanban-mcp/internal/docket"
 	"github.com/ethanhinson/kanban-mcp/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -110,6 +111,13 @@ func (s *Server) register(srv *mcp.Server) {
 			"columns, lanes, items, precomputed cell grid, stats). Feed this to a UI generator to render a " +
 			"custom visualization on demand, or to any external renderer.",
 	}, s.boardExport)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "docket_sync",
+		Description: "Import a docket backlog into this board (idempotent). Reads change manifests from the " +
+			"docket docs directory (e.g. <repo>/.docket/docs) and maps each change to a card keyed by docket id; " +
+			"re-running updates in place. Works with any harness because docket stores work as markdown on a branch.",
+	}, s.docketSync)
 }
 
 // ---- tool I/O types ----
@@ -339,6 +347,27 @@ func (s *Server) boardExport(ctx context.Context, _ *mcp.CallToolRequest, _ boar
 		return nil, board.Snapshot{}, err
 	}
 	return nil, snap, nil
+}
+
+type docketSyncIn struct {
+	DocsDir string `json:"docs_dir" jsonschema:"path to the docket docs directory, e.g. /path/to/repo/.docket/docs"`
+}
+
+type docketSyncOut struct {
+	Changes int    `json:"changes"`
+	Lanes   int    `json:"lanes"`
+	Message string `json:"message"`
+}
+
+func (s *Server) docketSync(ctx context.Context, _ *mcp.CallToolRequest, in docketSyncIn) (*mcp.CallToolResult, docketSyncOut, error) {
+	res, err := docket.NewSyncer(s.st, s.plan.ID).Sync(ctx, in.DocsDir)
+	if err != nil {
+		return nil, docketSyncOut{}, err
+	}
+	return nil, docketSyncOut{
+		Changes: res.Changes, Lanes: res.Lanes,
+		Message: fmt.Sprintf("synced %d docket changes into %d type lanes", res.Changes, res.Lanes),
+	}, nil
 }
 
 // defaultLane picks the lane an item lands in when none is given, based on the

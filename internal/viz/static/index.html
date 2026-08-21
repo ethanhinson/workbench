@@ -87,7 +87,10 @@ function childrenOf(snap, parentID) {
   return snap.items.filter(i => (i.parent_id||"") === parentID);
 }
 
-function card(snap, it, nested=false) {
+// depth caps how deep children render inline. Beyond MAX_NEST we show a compact
+// count instead of a cascade, so long discovery chains (docket) stay scannable.
+const MAX_NEST = 1;
+function card(snap, it, depth=0) {
   const kids = childrenOf(snap, it.id);
   const badges = [
     `<span class="badge">${it.priority}</span>`,
@@ -95,14 +98,25 @@ function card(snap, it, nested=false) {
     it.blocked ? `<span class="badge blocked">blocked</span>` : "",
     ...(it.labels||[]).map(l => `<span class="badge">${l.ns}:${l.value}</span>`),
   ].join("");
-  const childHTML = kids.length
-    ? `<div class="child">${kids.map(k => card(snap,k,true)).join("")}</div>` : "";
+  let childHTML = "";
+  if (kids.length && depth < MAX_NEST) {
+    childHTML = `<div class="child">${kids.map(k => card(snap,k,depth+1)).join("")}</div>`;
+  } else if (kids.length) {
+    // collapse deeper descendants into a badge on the parent
+    const total = countDescendants(snap, it.id);
+    childHTML = `<div class="badges"><span class="badge">+${total} nested</span></div>`;
+  }
   return `<div class="card ${it.priority}" onclick="showDetail('${it.id}');event.stopPropagation()">
     <div class="kind">${it.kind}</div>
     <div class="title">${escapeHTML(it.title)}</div>
     <div class="badges">${badges}</div>
     ${childHTML}
   </div>`;
+}
+
+function countDescendants(snap, id) {
+  const kids = childrenOf(snap, id);
+  return kids.reduce((n,k) => n + 1 + countDescendants(snap, k.id), 0);
 }
 
 function render(snap) {

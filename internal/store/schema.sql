@@ -56,9 +56,12 @@ CREATE TABLE IF NOT EXISTS item (
     blocked     INTEGER NOT NULL DEFAULT 0, -- blocked flag (orthogonal to column)
     blocked_reason TEXT NOT NULL DEFAULT '',
     position    INTEGER NOT NULL DEFAULT 0, -- order within (column, lane)
+    ext_key     TEXT NOT NULL DEFAULT '',   -- external source id for idempotent import (e.g. "docket:74")
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_item_extkey ON item(plan_id, ext_key) WHERE ext_key <> '';
 
 CREATE INDEX IF NOT EXISTS idx_item_plan   ON item(plan_id);
 CREATE INDEX IF NOT EXISTS idx_item_parent ON item(parent_id);

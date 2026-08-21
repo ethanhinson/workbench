@@ -1,3 +1,6 @@
 EnsurePlan
 New
 PlanID
+UpsertByExtKey
+ItemIDByExtKey
+ListItems

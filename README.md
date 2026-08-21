@@ -82,6 +82,32 @@ export all consume the same shape.
 ./kanban-mcp --db ./runbook.db --plan "Runbook" --agent alice --http :7777
 ```
 
+## Importing a docket backlog (works with any harness)
+
+[docket](https://github.com/ethanhinson) tracks work as markdown change manifests on
+the repo's metadata branch. Because that's just markdown-on-a-branch, kanban-mcp can
+read it directly and render it — no docket tooling or specific agent required.
+
+```sh
+# one-shot import (idempotent; re-run to refresh)
+kanban-mcp --db /tmp/fuse-board.db --plan "Fuse Backlog" \
+  --profile docket --docket-sync ~/dev/fuse/.docket/docs
+
+# then browse it
+kanban-mcp --db /tmp/fuse-board.db --plan "Fuse Backlog" --viz-only --http :7777
+```
+
+Or from an agent: call the **`docket_sync`** MCP tool with `{ "docs_dir": "<repo>/.docket/docs" }`.
+
+If the metadata branch isn't checked out to a worktree, export it read-only first:
+`git -C <repo> archive docket docs | tar -x -C "$TMP"` and point `--docket-sync` at
+`$TMP/docs`. The **`kanban-docket-sync` skill** (`skills/`) automates this resolution.
+
+Mapping: change → card (`docket:<id>`), `status` → column, `type` → swim lane,
+`priority` → `p0..p3`, spec/plan presence → spec status, `blocked_by` → blocked flag,
+`discovered_from`/`depends_on` → nesting. The board is read-only over docket — docket
+stays the source of truth.
+
 ## Tools
 
 | Tool | Purpose |
@@ -96,6 +122,7 @@ export all consume the same shape.
 | `lane_configure` | Create/ensure a swim lane |
 | `items_list` | List items with filters (column/lane/parent/kind) |
 | `board_export` | Export the renderer-agnostic Snapshot for on-demand/custom UI |
+| `docket_sync` | Import a docket backlog (markdown-on-a-branch) into the board, idempotently |
 
 ## Run
 
