@@ -67,37 +67,26 @@ Invalid moves are rejected by the server, so the board can't drift out of policy
 ## Visualization — a pluggable UI layer
 
 The board is exposed as a renderer-agnostic **Snapshot** (schema-versioned JSON:
-plan, columns, lanes, items, a precomputed cell grid, and stats). That Snapshot is
-the seam — the bundled SPA, an on-demand generated component, a TUI, or a static
-export all consume the same shape.
+plan, columns, lanes, items, links, per-view placements, and stats). That Snapshot
+is the seam — the bundled SPA, an on-demand generated component, or a static export
+all consume the same shape.
 
 - **`GET /api/board`** — the Snapshot contract (CORS-open, so external renderers can fetch it).
 - **`GET /api/stream`** — the same Snapshot pushed over **SSE** on every store mutation (no polling).
+- **`GET /api/item/{id}`** — full card detail: bidirectional dependencies + rendered spec/plan content.
 - **`GET /`** — a zero-build reference SPA (embedded, vanilla JS, live over SSE via `EventSource`).
 - **MCP `board_export`** — hands an agent the same Snapshot, to drive on-demand UI generation.
 
-### Live updates: SSE, one push path, many renderers
+### Live updates: SSE, read-only board
 
 Every store mutation bumps a revision on an in-process broker; `GET /api/stream`
 turns that into Server-Sent Events. The board is **read-only from the UI's side**
 (the agent writes through MCP), so SSE — server→client push over plain HTTP with
 auto-reconnect — is the right fit; WebSockets would add a duplex channel nothing
-uses. The browser SPA and the terminal TUI both consume this one stream.
+uses.
 
-### Terminal UI (TUI)
-
-A bubbletea TUI renders the board in the terminal as a **thin SSE client** — it
-runs against any served board, local or remote, and needs no local store:
-
-```sh
-# in one shell: serve a board
-kanban-mcp --db ./runbook.db --plan "Runbook" --viz-only --http :7777
-# in another: watch it live in the terminal
-kanban-mcp --tui http://localhost:7777/api/stream
-```
-
-Columns × swim lanes with per-cell counts and top items; `←/→` focuses a lane,
-`q` quits. It live-updates the instant an agent moves a card.
+> A terminal UI (TUI) client is deliberately out of scope for now — the Snapshot +
+> SSE contract makes one easy to add later without server changes.
 
 ```sh
 # browse a board (no agent needed)
