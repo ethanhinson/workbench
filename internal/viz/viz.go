@@ -48,7 +48,12 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	sub, _ := fs.Sub(staticFS, "static")
-	mux.Handle("/", http.FileServer(http.FS(sub)))
+	// no-store so a rebuilt SPA is never served stale from browser cache.
+	fileSrv := http.FileServer(http.FS(sub))
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store, must-revalidate")
+		fileSrv.ServeHTTP(w, r)
+	}))
 
 	mux.HandleFunc("/api/board", s.handleBoard)
 	mux.HandleFunc("/api/stream", s.handleStream)
