@@ -1,0 +1,5 @@
+/kanban-mcp
+*.db
+*.db-shm
+*.db-wal
+/tmp/
