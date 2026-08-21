@@ -4,6 +4,13 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>kanban-mcp</title>
+<!-- markdown + mermaid rendering for spec detail (local dev tool; CDN is fine) -->
+<script src="https://cdn.jsdelivr.net/npm/markdown-it@14/dist/markdown-it.min.js"></script>
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({ startOnLoad:false, theme:"dark", securityLevel:"loose" });
+  window.__mermaid = mermaid;
+</script>
 <style>
   :root {
     --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#272b35; --muted:#8b93a7; --fg:#e6e9f0;
@@ -24,21 +31,36 @@
   .tab .count { font-size:11px; color:var(--muted); margin-left:6px; }
   .stats { display:flex; gap:12px; font-size:12px; color:var(--muted); }
   .board { overflow:auto; padding:12px; }
-  table { border-collapse:collapse; min-width:100%; }
+  /* vertical swim lanes (classic kanban): lanes are columns, cards stack in them */
+  .lanes { display:flex; gap:12px; align-items:flex-start; min-height:60vh; }
+  .laneCol { flex:1 1 0; min-width:240px; background:#12151c; border:1px solid var(--line); border-radius:10px;
+             display:flex; flex-direction:column; max-height:calc(100vh - 110px); }
+  .laneHead { padding:9px 12px; font-weight:600; font-size:13px; border-bottom:1px solid var(--line);
+              position:sticky; top:0; background:#12151c; border-radius:10px 10px 0 0; display:flex; align-items:center; }
+  .laneHead .count { margin-left:auto; font-size:11px; color:var(--muted); background:var(--panel2);
+                     border-radius:999px; padding:1px 8px; }
+  .laneBody { padding:8px; overflow:auto; }
+  .badge.stage { color:var(--fg); background:var(--panel2); border-color:var(--line); text-transform:capitalize; }
+  /* fixed layout so every column is equal width — no runaway middle lane */
+  table { border-collapse:collapse; width:100%; table-layout:fixed; }
+  col.lanecol { width:130px; }
   th.col { text-align:left; padding:8px 10px; color:var(--muted); font-weight:600; font-size:11px;
            text-transform:uppercase; letter-spacing:.04em; border-bottom:1px solid var(--line); white-space:nowrap; }
   th.lane { text-align:left; padding:10px; font-weight:600; vertical-align:top; border-right:1px solid var(--line);
-            white-space:nowrap; position:sticky; left:0; background:var(--bg); min-width:120px; }
-  td.cell { vertical-align:top; padding:6px; border-bottom:1px solid var(--line); border-right:1px dashed var(--line); min-width:230px; }
+            white-space:nowrap; position:sticky; left:0; background:var(--bg); }
+  td.cell { vertical-align:top; padding:6px; border-bottom:1px solid var(--line); border-right:1px dashed var(--line);
+            overflow:hidden; }
   .card { background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--p2); border-radius:8px;
-          padding:7px 9px; margin-bottom:7px; cursor:pointer; }
+          padding:7px 9px; margin-bottom:7px; cursor:pointer; overflow:hidden; }
   .card:hover { border-color:#3a3f4b; background:var(--panel2); }
   .card.p0 { border-left-color:var(--p0); } .card.p1 { border-left-color:var(--p1); }
   .card.p2 { border-left-color:var(--p2); } .card.p3 { border-left-color:var(--p3); }
   .card.blocked { box-shadow:inset 3px 0 0 var(--blocked); }
   .card .kind { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
-  .card .title { font-weight:500; margin:2px 0; font-size:13px; }
-  .badges { display:flex; gap:5px; flex-wrap:wrap; margin-top:5px; }
+  /* clamp title to 2 lines with ellipsis */
+  .card .title { font-weight:500; margin:2px 0; font-size:13px; line-height:1.3;
+                 display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .badges { display:flex; align-items:center; gap:5px; flex-wrap:wrap; margin-top:6px; }
   .badge { font-size:10px; padding:1px 6px; border-radius:999px; border:1px solid var(--line); color:var(--muted); }
   .badge.spec-missing { color:var(--spec-missing); }
   .badge.spec-draft { color:var(--spec-draft); border-color:var(--spec-draft); }
@@ -63,6 +85,20 @@
   .section-h { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:16px 0 6px; }
   pre.spec { white-space:pre-wrap; word-break:break-word; background:#0c0e12; border:1px solid var(--line);
              border-radius:8px; padding:12px; font:12px/1.5 ui-monospace,Menlo,monospace; max-height:45vh; overflow:auto; }
+  /* rendered markdown */
+  .md { background:#0c0e12; border:1px solid var(--line); border-radius:8px; padding:14px 16px; overflow:auto; max-height:55vh; }
+  .md h1,.md h2,.md h3 { margin:14px 0 8px; line-height:1.3; }
+  .md h1 { font-size:19px; } .md h2 { font-size:16px; } .md h3 { font-size:14px; }
+  .md p,.md li { font-size:13px; line-height:1.55; }
+  .md ul,.md ol { padding-left:20px; }
+  .md code { background:#1a1e27; padding:1px 5px; border-radius:4px; font:12px ui-monospace,Menlo,monospace; }
+  .md pre { background:#161a22; border:1px solid var(--line); border-radius:6px; padding:10px; overflow:auto; }
+  .md pre code { background:none; padding:0; }
+  .md table { border-collapse:collapse; margin:8px 0; }
+  .md th,.md td { border:1px solid var(--line); padding:4px 8px; font-size:12px; }
+  .md blockquote { border-left:3px solid var(--line); margin:8px 0; padding-left:12px; color:var(--muted); }
+  .md a { color:var(--accent); }
+  .md .mermaid { background:#0c0e12; text-align:center; margin:10px 0; }
   .close { cursor:pointer; color:var(--muted); font-size:20px; padding:0 6px; }
   .backdrop { position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:15; display:none; }
   .backdrop.open { display:block; }
@@ -115,9 +151,11 @@ function shortRef(it){
   const m = /^#(\d+)/.exec(it.title); return m ? "#"+m[1] : it.title.slice(0,10);
 }
 
-function card(it){
+// card renders one ticket. colName is the second-axis value for this view
+// (priority in Backlog, progress in In-Flight) shown as a status badge.
+function card(it, colName){
   const badges = [
-    `<span class="badge">${it.priority}</span>`,
+    colName ? `<span class="badge stage">${esc(colName)}</span>` : `<span class="badge">${it.priority}</span>`,
     specBadge(it.spec_status),
     it.blocked ? `<span class="badge blocked">blocked</span>` : "",
     depChips(it),
@@ -129,24 +167,39 @@ function card(it){
   </div>`;
 }
 
+// renderGrid draws lanes as VERTICAL columns (classic kanban): each swim lane is
+// a column, tickets stack in it. The old second axis (priority/progress) becomes
+// a badge on the card and the within-lane sort key.
 function renderGrid(kind){
   const vd = viewDef(kind);
   const items = (SNAP.items||[]).filter(i=>i.views && i.views[kind]);
-  // build cells
-  const cells = {}; // lane|col -> items
-  for (const it of items){ const p=it.views[kind]; (cells[p.lane+"|"+p.column] ||= []).push(it); }
-  let html = `<table><thead><tr><th class="lane"></th>`;
-  for (const c of vd.columns) html += `<th class="col">${esc(c.name)}</th>`;
-  html += `</tr></thead><tbody>`;
-  for (const lane of vd.lanes){
-    html += `<tr><th class="lane">${esc(lane.name)}</th>`;
-    for (const col of vd.columns){
-      const list = cells[lane.key+"|"+col.key]||[];
-      html += `<td class="cell">${list.length?list.map(card).join(""):'<div class="empty">·</div>'}</td>`;
-    }
-    html += `</tr>`;
+  const colName = {}; // column key -> display name (for the per-card badge)
+  vd.columns.forEach((c,i)=>{ colName[c.key] = c.name; c._ord = i; });
+  const colOrd = {}; vd.columns.forEach((c,i)=>colOrd[c.key]=i);
+
+  // group items by lane
+  const byLane = {};
+  for (const it of items){ const p=it.views[kind]; (byLane[p.lane] ||= []).push(it); }
+  // sort within a lane by the second axis (progress/priority order), then title
+  for (const k in byLane){
+    byLane[k].sort((a,b)=>{
+      const oa=colOrd[a.views[kind].column]??9, ob=colOrd[b.views[kind].column]??9;
+      return oa-ob || a.title.localeCompare(b.title);
+    });
   }
-  html += `</tbody></table>`;
+
+  let html = `<div class="lanes">`;
+  for (const lane of vd.lanes){
+    const list = byLane[lane.key]||[];
+    html += `<div class="laneCol">
+      <div class="laneHead">${esc(lane.name)}<span class="count">${list.length}</span></div>
+      <div class="laneBody">${
+        list.length ? list.map(it=>card(it, colName[it.views[kind].column])).join("")
+                    : '<div class="empty">—</div>'
+      }</div>
+    </div>`;
+  }
+  html += `</div>`;
   return html;
 }
 
@@ -202,11 +255,39 @@ function renderDrawer(d){
   if (d.related&&d.related.length){ h+=`<div class="section-h">Related</div><div class="deplist">${d.related.map(refRow).join("")}</div>`; }
 
   if (it.spec_ref) h += `<div class="section-h">Spec — ${esc(it.spec_ref)}</div>`;
-  if (d.spec_content) h += `<pre class="spec">${esc(d.spec_content)}</pre>`;
+  if (d.spec_content) h += `<div class="md" id="spec-md"></div>`;
   else if (it.spec_ref) h += `<div class="empty">spec file not found under repo root (pass --repo-root)</div>`;
-  if (it.body) h += `<div class="section-h">Notes</div><pre class="spec">${esc(it.body)}</pre>`;
+  if (it.body) h += `<div class="section-h">Notes</div><div class="md" id="body-md"></div>`;
   h += `<div class="section-h">id</div><div class="tag">${it.id}${it.ext_key?' · '+it.ext_key:''}</div>`;
   $("#drawer-body").innerHTML = h;
+
+  // Render markdown (with mermaid) into the placeholders after insertion.
+  if (d.spec_content) renderMarkdown($("#spec-md"), d.spec_content);
+  if (it.body) renderMarkdown($("#body-md"), it.body);
+}
+
+// renderMarkdown turns markdown text into HTML, then upgrades ```mermaid fences
+// into rendered diagrams. markdown-it escapes HTML by default (html:false), so
+// this is safe against injected markup in spec files.
+let _md = null, _mmid = 0;
+function renderMarkdown(el, text){
+  if (!el) return;
+  if (!_md && window.markdownit) _md = window.markdownit({ html:false, linkify:true, breaks:false });
+  if (!_md){ el.innerHTML = `<pre class="spec">${esc(text)}</pre>`; return; }
+  el.innerHTML = _md.render(text);
+  // Convert <pre><code class="language-mermaid"> blocks into mermaid diagrams.
+  el.querySelectorAll('pre > code.language-mermaid, code.language-mermaid').forEach(code=>{
+    const pre = code.closest('pre') || code;
+    const div = document.createElement('div');
+    div.className = 'mermaid';
+    div.textContent = code.textContent;
+    pre.replaceWith(div);
+  });
+  const nodes = el.querySelectorAll('.mermaid');
+  if (nodes.length && window.__mermaid){
+    nodes.forEach(n=>{ n.id = 'mmd-'+(_mmid++); });
+    window.__mermaid.run({ nodes:[...nodes] }).catch(()=>{});
+  }
 }
 document.addEventListener("keydown",e=>{ if(e.key==="Escape") closeDrawer(); });
 
