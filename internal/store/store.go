@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -43,16 +44,29 @@ func (s *Store) Close() error { return s.db.Close() }
 func now() string    { return time.Now().UTC().Format(time.RFC3339) }
 func newID() string  { return ulid.Make().String() }
 
-// EnsurePlan returns the single plan for this db, creating it with default
-// columns and a default shared lane if the db is empty.
-func (s *Store) EnsurePlan(ctx context.Context, name, description string) (*board.Plan, error) {
+// EnsurePlan returns the single plan for this db. If the db is empty it creates
+// the plan from the named methodology profile (built-in preset), seeding that
+// profile's columns, seed lanes, lane dimension, and enforcement policies. The
+// profile is what binds meaning to both board axes; see board.Profile.
+// An unknown profileKey falls back to "sdd".
+func (s *Store) EnsurePlan(ctx context.Context, name, description, profileKey string) (*board.Plan, error) {
 	var p board.Plan
-	row := s.db.QueryRowContext(ctx, `SELECT id, name, description, created_at, updated_at FROM plan LIMIT 1`)
-	err := row.Scan(&p.ID, &p.Name, &p.Description, &p.CreatedAt, &p.UpdatedAt)
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, name, description, profile, lane_dim, policies, created_at, updated_at FROM plan LIMIT 1`)
+	err := row.Scan(&p.ID, &p.Name, &p.Description, &p.ProfileKey, &p.LaneDimension, &p.PoliciesJSON, &p.CreatedAt, &p.UpdatedAt)
 	if err == nil {
-		return &p, nil
+		return &p, nil // existing plan keeps its profile; profileKey arg is ignored
 	}
 	if err != sql.ErrNoRows {
+		return nil, err
+	}
+
+	prof, ok := board.LookupProfile(profileKey)
+	if !ok {
+		prof, _ = board.LookupProfile("sdd")
+	}
+	policiesJSON, err := json.Marshal(prof.Policies)
+	if err != nil {
 		return nil, err
 	}
 
@@ -63,13 +77,17 @@ func (s *Store) EnsurePlan(ctx context.Context, name, description string) (*boar
 	defer tx.Rollback()
 
 	ts := now()
-	p = board.Plan{ID: newID(), Name: name, Description: description, CreatedAt: ts, UpdatedAt: ts}
+	p = board.Plan{
+		ID: newID(), Name: name, Description: description,
+		ProfileKey: prof.Key, LaneDimension: string(prof.LaneDimension), PoliciesJSON: string(policiesJSON),
+		CreatedAt: ts, UpdatedAt: ts,
+	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO plan(id,name,description,created_at,updated_at) VALUES(?,?,?,?,?)`,
-		p.ID, p.Name, p.Description, p.CreatedAt, p.UpdatedAt); err != nil {
+		`INSERT INTO plan(id,name,description,profile,lane_dim,policies,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`,
+		p.ID, p.Name, p.Description, p.ProfileKey, p.LaneDimension, p.PoliciesJSON, p.CreatedAt, p.UpdatedAt); err != nil {
 		return nil, err
 	}
-	for _, c := range board.DefaultColumns() {
+	for _, c := range prof.Columns {
 		var wip any
 		if c.WIPLimit != nil {
 			wip = *c.WIPLimit
@@ -80,16 +98,75 @@ func (s *Store) EnsurePlan(ctx context.Context, name, description string) (*boar
 			return nil, err
 		}
 	}
-	// Default shared lane so items are never orphaned.
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO lane(id,plan_id,key,name,agent_id,position) VALUES(?,?,?,?,?,?)`,
-		newID(), p.ID, "shared", "Shared", "", 0); err != nil {
-		return nil, err
+	// Always a shared lane so items are never orphaned, plus any profile seed lanes.
+	seedLanes := append([]board.Lane{{Key: "shared", Name: "Shared", Position: 0}}, prof.SeedLanes...)
+	for i, l := range seedLanes {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO lane(id,plan_id,key,name,agent_id,position) VALUES(?,?,?,?,?,?)`,
+			newID(), p.ID, l.Key, l.Name, l.AgentID, i); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return &p, nil
+}
+
+// LoadPlan returns the single plan row with all fields populated.
+func (s *Store) LoadPlan(ctx context.Context, planID string) (*board.Plan, error) {
+	var p board.Plan
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id,name,description,profile,lane_dim,policies,created_at,updated_at FROM plan WHERE id=?`, planID).
+		Scan(&p.ID, &p.Name, &p.Description, &p.ProfileKey, &p.LaneDimension, &p.PoliciesJSON, &p.CreatedAt, &p.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// Snapshot assembles the renderer-agnostic board.Snapshot for a plan — the
+// pluggable contract every UI (SPA, generated component, TUI, export) consumes.
+func (s *Store) Snapshot(ctx context.Context, planID string) (board.Snapshot, error) {
+	plan, err := s.LoadPlan(ctx, planID)
+	if err != nil {
+		return board.Snapshot{}, err
+	}
+	cols, err := s.Columns(ctx, planID)
+	if err != nil {
+		return board.Snapshot{}, err
+	}
+	lanes, err := s.Lanes(ctx, planID)
+	if err != nil {
+		return board.Snapshot{}, err
+	}
+	items, err := s.ListItems(ctx, planID, Filter{})
+	if err != nil {
+		return board.Snapshot{}, err
+	}
+	return board.BuildSnapshot(*plan, cols, lanes, items), nil
+}
+
+// Profile reconstructs the active board.Profile for a plan from persisted state
+// (columns from column_def, policies + lane dimension from the plan row).
+func (s *Store) Profile(ctx context.Context, planID string) (board.Profile, error) {
+	var prof board.Profile
+	var policiesJSON string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT profile, lane_dim, policies FROM plan WHERE id=?`, planID).
+		Scan(&prof.Key, &prof.LaneDimension, &policiesJSON)
+	if err != nil {
+		return prof, err
+	}
+	if err := json.Unmarshal([]byte(policiesJSON), &prof.Policies); err != nil {
+		return prof, fmt.Errorf("decode policies: %w", err)
+	}
+	cols, err := s.Columns(ctx, planID)
+	if err != nil {
+		return prof, err
+	}
+	prof.Columns = cols
+	return prof, nil
 }
 
 // Columns returns the plan's columns ordered left-to-right.
@@ -252,7 +329,29 @@ func (s *Store) MoveItem(ctx context.Context, agentID, itemID, toColumn, toLane 
 	if !colKeys[toColumn] {
 		return fmt.Errorf("unknown column %q", toColumn)
 	}
+
+	// Policy engine: the active methodology profile decides whether this move is
+	// legal — this is where the workflow and the swim lanes actually interact.
+	prof, err := s.Profile(ctx, planID)
+	if err != nil {
+		return err
+	}
+	cur, err := s.getItem(ctx, itemID)
+	if err != nil {
+		return err
+	}
+	if err := prof.CheckLeave(*cur, toColumn); err != nil {
+		return err
+	}
+
+	destLane := cur.LaneKey
+	if toLane != "" {
+		destLane = toLane
+	}
 	if err := s.checkWIP(ctx, planID, toColumn); err != nil {
+		return err
+	}
+	if err := s.checkLaneWIP(ctx, prof, planID, destLane, itemID); err != nil {
 		return err
 	}
 
@@ -296,6 +395,46 @@ func (s *Store) checkWIP(ctx context.Context, planID, columnKey string) error {
 		return fmt.Errorf("WIP limit reached for column %q (%d)", columnKey, limit.Int64)
 	}
 	return nil
+}
+
+// checkLaneWIP enforces the profile's per-lane WIP cap. excludeItemID is skipped
+// from the count so re-moving an item already in the lane isn't double-counted.
+func (s *Store) checkLaneWIP(ctx context.Context, prof board.Profile, planID, laneKey, excludeItemID string) error {
+	limit, ok := prof.LaneWIPLimit(laneKey)
+	if !ok {
+		return nil
+	}
+	var count int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(1) FROM item WHERE plan_id=? AND lane_key=? AND id<>?`,
+		planID, laneKey, excludeItemID).Scan(&count); err != nil {
+		return err
+	}
+	if count >= limit {
+		return fmt.Errorf("lane WIP limit reached for lane %q (%d)", laneKey, limit)
+	}
+	return nil
+}
+
+// getItem loads a single item (without labels) for policy checks.
+func (s *Store) getItem(ctx context.Context, itemID string) (*board.Item, error) {
+	var it board.Item
+	var blocked int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id,plan_id,COALESCE(parent_id,''),kind,title,body,column_key,COALESCE(lane_key,''),
+		        spec_ref,spec_status,priority,blocked,blocked_reason,position,created_at,updated_at
+		 FROM item WHERE id=?`, itemID).
+		Scan(&it.ID, &it.PlanID, &it.ParentID, &it.Kind, &it.Title, &it.Body,
+			&it.ColumnKey, &it.LaneKey, &it.SpecRef, &it.SpecStatus, &it.Priority,
+			&blocked, &it.BlockedReason, &it.Position, &it.CreatedAt, &it.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("item %q not found", itemID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	it.Blocked = blocked == 1
+	return &it, nil
 }
 
 // SetBlocked toggles the blocked flag with a reason.

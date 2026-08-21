@@ -10,6 +10,9 @@ CREATE TABLE IF NOT EXISTS plan (
     id          TEXT PRIMARY KEY,          -- ulid
     name        TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
+    profile     TEXT NOT NULL DEFAULT 'sdd', -- active methodology profile (sdd|scrum|kanban|custom)
+    lane_dim    TEXT NOT NULL DEFAULT 'agent', -- what a swim lane means under this profile
+    policies    TEXT NOT NULL DEFAULT '{}',  -- JSON-encoded board.Policies (the enforcement rules)
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
 );

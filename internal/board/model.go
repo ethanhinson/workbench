@@ -26,11 +26,14 @@ func (k Kind) Valid() bool {
 
 // Plan is the top-level shared board. One SQLite file holds exactly one Plan.
 type Plan struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Description   string `json:"description,omitempty"`
+	ProfileKey    string `json:"profile"`        // active methodology profile
+	LaneDimension string `json:"lane_dimension"` // what a swim lane means under it
+	PoliciesJSON  string `json:"-"`              // persisted enforcement rules (JSON)
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
 }
 
 // ColumnDef is a workflow stage (a kanban column).

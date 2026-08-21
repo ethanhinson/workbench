@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>kanban-mcp</title>
+<style>
+  :root {
+    --bg:#0f1115; --panel:#171a21; --line:#272b35; --muted:#8b93a7; --fg:#e6e9f0;
+    --p0:#ff5d5d; --p1:#ff9f43; --p2:#5b8def; --p3:#4b5163;
+    --spec-missing:#4b5163; --spec-draft:#c9a227; --spec-approved:#2ecc71; --blocked:#ff5d5d;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.4 ui-sans-serif,system-ui,Segoe UI,Roboto,sans-serif;
+         background:var(--bg); color:var(--fg); }
+  header { display:flex; align-items:center; gap:12px; padding:12px 16px;
+           border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:5; }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  .tag { font-size:11px; color:var(--muted); border:1px solid var(--line);
+         padding:2px 8px; border-radius:999px; }
+  .spacer { flex:1; }
+  select, button { background:var(--panel); color:var(--fg); border:1px solid var(--line);
+                   border-radius:6px; padding:5px 8px; font-size:13px; }
+  .board { overflow:auto; padding:12px; }
+  table { border-collapse:collapse; min-width:100%; }
+  th.col { text-align:left; padding:8px 10px; color:var(--muted); font-weight:600;
+           font-size:12px; text-transform:uppercase; letter-spacing:.04em;
+           border-bottom:1px solid var(--line); white-space:nowrap; }
+  th.lane { text-align:left; padding:10px; color:var(--fg); font-weight:600; vertical-align:top;
+            border-right:1px solid var(--line); white-space:nowrap; position:sticky; left:0;
+            background:var(--bg); min-width:130px; }
+  td.cell { vertical-align:top; padding:8px; border-bottom:1px solid var(--line);
+            border-right:1px dashed var(--line); min-width:210px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--p2);
+          border-radius:8px; padding:8px 10px; margin-bottom:8px; cursor:pointer; }
+  .card:hover { border-color:#3a3f4b; }
+  .card.p0 { border-left-color:var(--p0); } .card.p1 { border-left-color:var(--p1); }
+  .card.p2 { border-left-color:var(--p2); } .card.p3 { border-left-color:var(--p3); }
+  .card .kind { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+  .card .title { font-weight:500; margin:2px 0; }
+  .badges { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+  .badge { font-size:10px; padding:1px 6px; border-radius:999px; border:1px solid var(--line); color:var(--muted); }
+  .badge.spec-missing { color:var(--spec-missing); }
+  .badge.spec-draft { color:var(--spec-draft); border-color:var(--spec-draft); }
+  .badge.spec-approved { color:var(--spec-approved); border-color:var(--spec-approved); }
+  .badge.blocked { color:#fff; background:var(--blocked); border-color:var(--blocked); }
+  .child { margin-left:10px; border-left:1px solid var(--line); padding-left:8px; }
+  .stats { display:flex; gap:14px; font-size:12px; color:var(--muted); }
+  .empty { color:var(--muted); font-size:12px; padding:8px; }
+  dialog { background:var(--panel); color:var(--fg); border:1px solid var(--line);
+           border-radius:10px; max-width:560px; width:90%; }
+  dialog::backdrop { background:rgba(0,0,0,.55); }
+  pre { white-space:pre-wrap; word-break:break-word; }
+</style>
+</head>
+<body>
+<header>
+  <h1>kanban-mcp</h1>
+  <span class="tag" id="plan-tag">—</span>
+  <span class="tag" id="profile-tag">—</span>
+  <span class="tag" id="lane-dim-tag">—</span>
+  <div class="spacer"></div>
+  <div class="stats" id="stats"></div>
+  <label class="tag">lane
+    <select id="lane-filter"><option value="">all</option></select>
+  </label>
+  <button id="refresh">refresh</button>
+  <label class="tag"><input type="checkbox" id="auto" checked /> auto</label>
+</header>
+
+<div class="board" id="board"><div class="empty">loading…</div></div>
+
+<dialog id="detail"><div id="detail-body"></div>
+  <div style="text-align:right;margin-top:10px"><button onclick="detail.close()">close</button></div>
+</dialog>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const detail = $("#detail");
+let AUTO = true, timer = null;
+
+function specBadge(s) { return `<span class="badge spec-${s}">spec:${s}</span>`; }
+
+function itemByID(snap, id) { return snap.items.find(i => i.id === id); }
+
+function childrenOf(snap, parentID) {
+  return snap.items.filter(i => (i.parent_id||"") === parentID);
+}
+
+function card(snap, it, nested=false) {
+  const kids = childrenOf(snap, it.id);
+  const badges = [
+    `<span class="badge">${it.priority}</span>`,
+    specBadge(it.spec_status),
+    it.blocked ? `<span class="badge blocked">blocked</span>` : "",
+    ...(it.labels||[]).map(l => `<span class="badge">${l.ns}:${l.value}</span>`),
+  ].join("");
+  const childHTML = kids.length
+    ? `<div class="child">${kids.map(k => card(snap,k,true)).join("")}</div>` : "";
+  return `<div class="card ${it.priority}" onclick="showDetail('${it.id}');event.stopPropagation()">
+    <div class="kind">${it.kind}</div>
+    <div class="title">${escapeHTML(it.title)}</div>
+    <div class="badges">${badges}</div>
+    ${childHTML}
+  </div>`;
+}
+
+function render(snap) {
+  window.__snap = snap;
+  $("#plan-tag").textContent = snap.plan.name;
+  $("#profile-tag").textContent = "profile: " + snap.plan.profile;
+  $("#lane-dim-tag").textContent = "lane = " + snap.plan.lane_dimension;
+  const s = snap.stats;
+  $("#stats").innerHTML =
+    `<span>${s.total_items} items</span><span>${s.blocked} blocked</span>` +
+    Object.entries(s.by_spec_status||{}).map(([k,v]) => `<span>${k}:${v}</span>`).join("");
+
+  const laneSel = $("#lane-filter"), prev = laneSel.value;
+  laneSel.innerHTML = `<option value="">all</option>` +
+    snap.lanes.map(l => `<option value="${l.key}">${l.name}</option>`).join("");
+  laneSel.value = prev;
+
+  const lanes = snap.lanes.filter(l => !prev || l.key === prev);
+  // Only show lanes that have items OR are seed/agent lanes (keep the grid honest).
+  const rows = lanes.map(lane => {
+    const cells = snap.columns.map(col => {
+      const key = lane.key + "|" + col.key;
+      const cell = snap.cells[key];
+      const topLevel = (cell?.item_ids||[])
+        .map(id => itemByID(snap,id))
+        .filter(it => it && !it.parent_id); // nest children under parents
+      const inner = topLevel.length
+        ? topLevel.map(it => card(snap,it)).join("")
+        : `<div class="empty">·</div>`;
+      return `<td class="cell">${inner}</td>`;
+    }).join("");
+    return `<tr><th class="lane">${lane.name}<div class="tag" style="margin-top:4px">${lane.key}</div></th>${cells}</tr>`;
+  }).join("");
+
+  $("#board").innerHTML = `<table>
+    <thead><tr><th class="lane"></th>${snap.columns.map(c=>`<th class="col">${c.name}${c.wip_limit?` · wip ${c.wip_limit}`:""}</th>`).join("")}</tr></thead>
+    <tbody>${rows || `<tr><td class="empty">no lanes</td></tr>`}</tbody>
+  </table>`;
+}
+
+function showDetail(id) {
+  const snap = window.__snap, it = itemByID(snap, id);
+  if (!it) return;
+  $("#detail-body").innerHTML = `
+    <div class="kind">${it.kind} · ${it.priority} · ${it.column_key} · lane ${it.lane_key||"shared"}</div>
+    <h2 style="margin:6px 0">${escapeHTML(it.title)}</h2>
+    <div class="badges">${specBadge(it.spec_status)}${it.blocked?`<span class="badge blocked">blocked: ${escapeHTML(it.blocked_reason||"")}</span>`:""}</div>
+    ${it.spec_ref?`<p class="tag">spec: ${escapeHTML(it.spec_ref)}</p>`:""}
+    ${it.body?`<pre>${escapeHTML(it.body)}</pre>`:""}
+    <p class="empty">id ${it.id}</p>`;
+  detail.showModal();
+}
+
+function escapeHTML(s){return (s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+
+async function load() {
+  try {
+    const snap = await (await fetch("/api/board")).json();
+    render(snap);
+  } catch (e) { $("#board").innerHTML = `<div class="empty">error: ${e}</div>`; }
+}
+
+function schedule(){ clearInterval(timer); if(AUTO) timer=setInterval(load, 3000); }
+$("#refresh").onclick = load;
+$("#auto").onchange = (e)=>{ AUTO=e.target.checked; schedule(); };
+$("#lane-filter").onchange = ()=> window.__snap && render(window.__snap);
+load(); schedule();
+</script>
+</body>
+</html>

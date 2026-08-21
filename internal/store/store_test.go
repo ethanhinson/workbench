@@ -15,7 +15,7 @@ func newTestStore(t *testing.T) (*Store, *board.Plan) {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { st.Close() })
-	p, err := st.EnsurePlan(context.Background(), "Test Plan", "")
+	p, err := st.EnsurePlan(context.Background(), "Test Plan", "", "sdd")
 	if err != nil {
 		t.Fatalf("ensure plan: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestEnsurePlanSeedsDefaults(t *testing.T) {
 	}
 
 	// EnsurePlan must be idempotent: second call returns the same plan.
-	p2, err := st.EnsurePlan(ctx, "Ignored", "")
+	p2, err := st.EnsurePlan(ctx, "Ignored", "", "sdd")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,6 +98,61 @@ func TestBadEnumsRejected(t *testing.T) {
 		Labels: []board.Label{{NS: "priority", Value: "urgent"}},
 	}); err == nil {
 		t.Fatal("expected bad label to be rejected")
+	}
+}
+
+func TestSDDSpecGate(t *testing.T) {
+	st, p := newTestStore(t) // sdd profile
+	ctx := context.Background()
+
+	// A story in specd cannot leave until its spec is approved.
+	story, err := st.CreateItem(ctx, "a1", &board.Item{
+		PlanID: p.ID, Kind: board.KindStory, Title: "Login", ColumnKey: "specd", LaneKey: "shared",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MoveItem(ctx, "a1", story.ID, "in_progress", ""); err == nil {
+		t.Fatal("expected spec gate to block move out of specd")
+	}
+	// Approve the spec, then the same move succeeds.
+	if err := st.SetSpec(ctx, "a1", story.ID, "specs/login.md", board.SpecApproved); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MoveItem(ctx, "a1", story.ID, "in_progress", ""); err != nil {
+		t.Fatalf("approved spec should allow move: %v", err)
+	}
+}
+
+func TestKanbanExpediteBypassesLaneWIP(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "k.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	p, err := st.EnsurePlan(context.Background(), "K", "", "kanban")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// standard lane WIP is 5; fill it, then confirm the 6th is rejected there...
+	for i := 0; i < 5; i++ {
+		if _, err := st.CreateItem(ctx, "a1", &board.Item{
+			PlanID: p.ID, Kind: board.KindTask, Title: "t", ColumnKey: "backlog", LaneKey: "standard",
+		}); err != nil {
+			t.Fatalf("fill standard %d: %v", i, err)
+		}
+	}
+	sixth, _ := st.CreateItem(ctx, "a1", &board.Item{
+		PlanID: p.ID, Kind: board.KindTask, Title: "overflow", ColumnKey: "backlog", LaneKey: "standard",
+	})
+	if err := st.MoveItem(ctx, "a1", sixth.ID, "in_progress", "standard"); err == nil {
+		t.Fatal("expected standard lane WIP to block")
+	}
+	// ...but moving it into the exempt expedite lane is allowed.
+	if err := st.MoveItem(ctx, "a1", sixth.ID, "in_progress", "expedite"); err != nil {
+		t.Fatalf("expedite lane should bypass WIP: %v", err)
 	}
 }
 

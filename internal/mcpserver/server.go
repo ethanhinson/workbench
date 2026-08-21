@@ -20,21 +20,28 @@ type Server struct {
 	agentID string // this server instance's owning agent; used for lanes + event attribution
 }
 
+// PlanID returns the id of the plan this server serves (used to wire the viz layer).
+func (s *Server) PlanID() string { return s.plan.ID }
+
 // New builds an MCP server exposing the plan at the given db. agentID identifies
-// the agent driving this instance (used for its default swim lane and audit log).
-func New(ctx context.Context, st *store.Store, planName, agentID string) (*mcp.Server, *Server, error) {
-	plan, err := st.EnsurePlan(ctx, planName, "")
+// the agent driving this instance. profileKey selects the methodology (sdd|scrum|
+// kanban|...) on first init; it is ignored if the plan already exists.
+func New(ctx context.Context, st *store.Store, planName, agentID, profileKey string) (*mcp.Server, *Server, error) {
+	plan, err := st.EnsurePlan(ctx, planName, "", profileKey)
 	if err != nil {
 		return nil, nil, err
 	}
 	if agentID == "" {
 		agentID = "agent"
 	}
-	// Each agent gets its own swim lane by default; lanes roll up into the plan.
-	if _, err := st.EnsureLane(ctx, plan.ID, board.Lane{
-		Key: agentID, Name: agentID, AgentID: agentID,
-	}); err != nil {
-		return nil, nil, err
+	// Only auto-create a per-agent lane when the active profile's lane dimension
+	// is "agent" — under epic/class-of-service profiles the agent isn't the lane.
+	if plan.LaneDimension == string(board.LaneByAgent) {
+		if _, err := st.EnsureLane(ctx, plan.ID, board.Lane{
+			Key: agentID, Name: agentID, AgentID: agentID,
+		}); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	s := &Server{st: st, plan: plan, agentID: agentID}
@@ -96,6 +103,13 @@ func (s *Server) register(srv *mcp.Server) {
 		Name:        "items_list",
 		Description: "List items with optional filters (column, lane, parent_id, kind, blocked). For drilling into a subtree.",
 	}, s.itemsList)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "board_export",
+		Description: "Export the full board as a renderer-agnostic Snapshot (schema-versioned JSON: plan, " +
+			"columns, lanes, items, precomputed cell grid, stats). Feed this to a UI generator to render a " +
+			"custom visualization on demand, or to any external renderer.",
+	}, s.boardExport)
 }
 
 // ---- tool I/O types ----
@@ -187,7 +201,7 @@ func (s *Server) itemCreate(ctx context.Context, _ *mcp.CallToolRequest, in item
 	}
 	lane := in.Lane
 	if lane == "" {
-		lane = s.agentID
+		lane = s.defaultLane()
 	}
 	it := &board.Item{
 		PlanID:    s.plan.ID,
@@ -315,6 +329,26 @@ func (s *Server) itemsList(ctx context.Context, _ *mcp.CallToolRequest, in items
 		return nil, itemsListOut{}, err
 	}
 	return nil, itemsListOut{Items: items}, nil
+}
+
+type boardExportIn struct{}
+
+func (s *Server) boardExport(ctx context.Context, _ *mcp.CallToolRequest, _ boardExportIn) (*mcp.CallToolResult, board.Snapshot, error) {
+	snap, err := s.st.Snapshot(ctx, s.plan.ID)
+	if err != nil {
+		return nil, board.Snapshot{}, err
+	}
+	return nil, snap, nil
+}
+
+// defaultLane picks the lane an item lands in when none is given, based on the
+// profile's lane dimension: the agent's own lane under an agent profile, else the
+// shared lane (epic/class-of-service profiles expect an explicit lane).
+func (s *Server) defaultLane() string {
+	if s.plan.LaneDimension == string(board.LaneByAgent) {
+		return s.agentID
+	}
+	return "shared"
 }
 
 // parseLabels turns "ns:value" strings into board.Label.

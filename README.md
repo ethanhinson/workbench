@@ -38,6 +38,50 @@ plan while each owns a lane that rolls up into it.
 - **Audit log.** Every create/move/label/block/comment is appended to an event
   log, so an agent can reconstruct "what's discussed" in a run.
 
+## Methodology profiles — how the workflow influences swim lanes
+
+Columns and swim lanes are **orthogonal** storage. A **profile** is the thing that
+binds meaning to both axes and enforces how they interact. Selected on first init
+with `--profile` (or `KANBAN_PROFILE`); overridable per plan.
+
+A profile declares:
+
+- **columns** — the workflow stages
+- **lane_dimension** — *what a lane means*: `agent` | `epic` | `class_of_service` | custom
+- **policies** — the rules the server enforces on every move/create:
+  - `column_gates` — preconditions to *leave* a column (e.g. `spec_status=approved`)
+  - `transitions` — allowed column→column moves
+  - `lane_wip` — per-lane WIP caps
+  - `exempt_lanes` — lanes that bypass gates/WIP
+
+Built-in presets show three different answers to "how does the workflow touch lanes":
+
+| Profile | lane = | The coupling |
+|---|---|---|
+| **sdd** | agent | Nothing leaves `Spec'd` until `spec_status=approved`, and nothing advances while blocked — enforced **across every lane**. The workflow constrains all lanes. |
+| **scrum** | epic | Strict left-to-right `transitions`; stories flow within their epic's lane. |
+| **kanban** | class of service | `standard` lane has WIP 5; the `expedite` lane is **exempt** — here a *lane* overrides the *workflow*. |
+
+Invalid moves are rejected by the server, so the board can't drift out of policy.
+
+## Visualization — a pluggable UI layer
+
+The board is exposed as a renderer-agnostic **Snapshot** (schema-versioned JSON:
+plan, columns, lanes, items, a precomputed cell grid, and stats). That Snapshot is
+the seam — the bundled SPA, an on-demand generated component, a TUI, or a static
+export all consume the same shape.
+
+- **`GET /api/board`** — the Snapshot contract (CORS-open, so external renderers can fetch it).
+- **`GET /`** — a zero-build reference SPA (server-side embedded, vanilla JS, auto-refresh).
+- **MCP `board_export`** — hands an agent the same Snapshot, to drive on-demand UI generation.
+
+```sh
+# browse a board (no agent needed)
+./kanban-mcp --db ./runbook.db --plan "Runbook" --viz-only --http :7777
+# or serve the UI alongside the MCP stdio server
+./kanban-mcp --db ./runbook.db --plan "Runbook" --agent alice --http :7777
+```
+
 ## Tools
 
 | Tool | Purpose |
@@ -51,6 +95,7 @@ plan while each owns a lane that rolls up into it.
 | `item_comment` | Append to an item's activity log |
 | `lane_configure` | Create/ensure a swim lane |
 | `items_list` | List items with filters (column/lane/parent/kind) |
+| `board_export` | Export the renderer-agnostic Snapshot for on-demand/custom UI |
 
 ## Run
 
