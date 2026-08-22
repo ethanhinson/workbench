@@ -46,6 +46,10 @@
   .sb-head { display:flex; align-items:center; gap:8px; padding:10px 12px 6px; font-size:11px;
              text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
   .sb-head .count { margin-left:auto; }
+  .sb-proj { padding:8px 12px 3px; font-size:10px; text-transform:uppercase; letter-spacing:.05em;
+             color:#7d8590; font-weight:600; border-top:1px solid var(--line); margin-top:2px;
+             white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sb-proj:first-of-type { border-top:none; margin-top:0; }
   .sb-item { padding:8px 12px; cursor:pointer; border-left:2px solid transparent; }
   .sb-item:hover { background:#12151c; }
   .sb-item.active { background:#12161e; border-left-color:#2f81f7; }
@@ -397,17 +401,37 @@ async function loadBoards(){
   }catch(e){}
 }
 
+// projectLabel shows a directory project as its basename (full path on hover);
+// a non-path project shows verbatim; empty means "no project".
+function projectLabel(p){
+  if (!p) return "(no project)";
+  const parts = p.replace(/\/+$/,"").split("/");
+  return parts[parts.length-1] || p;
+}
+
 function renderSidebar(){
   const el = $("#sidebar");
   const cur = currentBoard();
   let h = `<div class="sb-head">Boards<span class="count">${BOARDS.length}</span></div>`;
-  h += BOARDS.map(b=>{
-    const active = b.id===cur;
-    return `<div class="sb-item ${active?'active':''}" onclick="switchBoard('${esc(b.id)}')" title="${esc(b.name)}">
-      <div class="sb-name">${active?'<span class="sb-dot"></span> ':''}${esc(b.name)}</div>
-      <div class="sb-meta"><span>${esc(b.profile)}</span><span>·</span><span>${b.items} item${b.items===1?'':'s'}</span></div>
-    </div>`;
-  }).join("") || `<div class="empty" style="padding:12px;font-size:12px">no boards yet</div>`;
+  if (!BOARDS.length){ el.innerHTML = h + `<div class="empty" style="padding:12px;font-size:12px">no boards yet</div>`; return; }
+  // Group boards by project, preserving first-seen order.
+  const groups = [];
+  const byProj = {};
+  for (const b of BOARDS){
+    const key = b.project || "";
+    if (!(key in byProj)){ byProj[key] = []; groups.push(key); }
+    byProj[key].push(b);
+  }
+  for (const proj of groups){
+    h += `<div class="sb-proj" title="${esc(proj||'no project')}">${esc(projectLabel(proj))}</div>`;
+    h += byProj[proj].map(b=>{
+      const active = b.id===cur;
+      return `<div class="sb-item ${active?'active':''}" onclick="switchBoard('${esc(b.id)}')" title="${esc(b.name)}">
+        <div class="sb-name">${active?'<span class="sb-dot"></span> ':''}${esc(b.name)}</div>
+        <div class="sb-meta"><span>${esc(b.profile)}</span><span>·</span><span>${b.items} item${b.items===1?'':'s'}</span></div>
+      </div>`;
+    }).join("");
+  }
   el.innerHTML = h;
 }
 

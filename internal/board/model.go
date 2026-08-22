@@ -28,6 +28,7 @@ func (k Kind) Valid() bool {
 type Plan struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`
+	Project       string `json:"project,omitempty"` // owning project (a directory path by default)
 	Description   string `json:"description,omitempty"`
 	ProfileKey    string `json:"profile"`        // active methodology profile
 	LaneDimension string `json:"lane_dimension"` // what a swim lane means under it

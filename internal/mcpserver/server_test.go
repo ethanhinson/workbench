@@ -23,7 +23,7 @@ func clientFor(t *testing.T, profile string) (*mcp.ClientSession, *store.Store) 
 	}
 	t.Cleanup(func() { st.Close() })
 
-	srv, _, err := New(ctx, st, "Test Plan", "alice", profile)
+	srv, _, err := New(ctx, st, "Test Plan", "alice", profile, "testproj")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,6 +207,56 @@ func TestBoardIsolation(t *testing.T) {
 	}
 }
 
+// TestBoardsByProject proves boards are scoped by project: the same board name
+// coexists under different projects, board_start returns the project, and
+// board_list filters by project (and falls back to the server default project).
+func TestBoardsByProject(t *testing.T) {
+	cs, _ := clientFor(t, "sdd") // server default project = "testproj"
+
+	// Same name, two explicit projects → two distinct boards.
+	var a, b boardStartOut
+	call(t, cs, "board_start", map[string]any{"name": "auth work", "project": "/dev/alpha"}, &a, false)
+	call(t, cs, "board_start", map[string]any{"name": "auth work", "project": "/dev/beta"}, &b, false)
+	if a.BoardID == b.BoardID {
+		t.Fatal("same name under different projects must be distinct boards")
+	}
+	if a.Project != "/dev/alpha" || b.Project != "/dev/beta" {
+		t.Fatalf("board_start should echo project: %q %q", a.Project, b.Project)
+	}
+
+	// Re-starting the same (project,name) selects the existing board.
+	var again boardStartOut
+	call(t, cs, "board_start", map[string]any{"name": "auth work", "project": "/dev/alpha"}, &again, false)
+	if again.BoardID != a.BoardID {
+		t.Fatal("board_start must be idempotent per (project,name)")
+	}
+
+	// A board with no explicit project lands in the server default project.
+	var d boardStartOut
+	call(t, cs, "board_start", map[string]any{"name": "default-proj board"}, &d, false)
+	if d.Project != "testproj" {
+		t.Fatalf("board should default to server project, got %q", d.Project)
+	}
+
+	// board_list filtered by project returns only that project's boards.
+	var alpha boardListOut
+	call(t, cs, "board_list", map[string]any{"project": "/dev/alpha"}, &alpha, false)
+	if len(alpha.Boards) != 1 || alpha.Boards[0].ID != a.BoardID {
+		t.Fatalf("project filter should return only /dev/alpha's board, got %+v", alpha.Boards)
+	}
+
+	// Unfiltered board_list spans projects.
+	var all boardListOut
+	call(t, cs, "board_list", map[string]any{}, &all, false)
+	projects := map[string]bool{}
+	for _, bd := range all.Boards {
+		projects[bd.Project] = true
+	}
+	if !projects["/dev/alpha"] || !projects["/dev/beta"] || !projects["testproj"] {
+		t.Fatalf("unfiltered list should span projects, saw %v", projects)
+	}
+}
+
 // TestNoSeedWhenPlanEmpty proves that starting the server without a plan name
 // seeds NO board — the runtime-board model, no empty placeholder left behind.
 func TestNoSeedWhenPlanEmpty(t *testing.T) {
@@ -217,7 +267,7 @@ func TestNoSeedWhenPlanEmpty(t *testing.T) {
 	}
 	t.Cleanup(func() { st.Close() })
 
-	srv, s, err := New(ctx, st, "", "alice", "sdd")
+	srv, s, err := New(ctx, st, "", "alice", "sdd", "testproj")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,4 +366,34 @@ func TestBoardRenameThroughMCP(t *testing.T) {
 	}
 	// Renaming an unknown board is rejected.
 	call(t, cs, "board_rename", map[string]any{"board_id": "nope", "name": "X"}, nil, true)
+}
+
+// TestBoardSetProjectThroughMCP proves board_set_project moves a board between
+// projects over the wire, board_list reflects the new project, and a name clash in
+// the target project is rejected.
+func TestBoardSetProjectThroughMCP(t *testing.T) {
+	cs, _ := clientFor(t, "sdd")
+	var mover, blocker boardStartOut
+	call(t, cs, "board_start", map[string]any{"name": "shared", "project": "/p/one"}, &mover, false)
+	call(t, cs, "board_start", map[string]any{"name": "shared", "project": "/p/two"}, &blocker, false)
+
+	// Move to a free project — allowed, reflected in board_list.
+	var out idResult
+	call(t, cs, "board_set_project", map[string]any{"board_id": mover.BoardID, "project": "/p/three"}, &out, false)
+	if !strings.Contains(out.Message, "/p/three") {
+		t.Fatalf("unexpected message: %s", out.Message)
+	}
+	var boards boardListOut
+	call(t, cs, "board_list", map[string]any{"project": "/p/three"}, &boards, false)
+	if len(boards.Boards) != 1 || boards.Boards[0].ID != mover.BoardID {
+		t.Fatalf("board should be listed under /p/three, got %+v", boards.Boards)
+	}
+
+	// Moving into a project that already has a "shared" board is rejected.
+	errText := call(t, cs, "board_set_project", map[string]any{"board_id": mover.BoardID, "project": "/p/two"}, nil, true)
+	if !strings.Contains(errText, "already has a board") {
+		t.Fatalf("expected clash rejection, got: %s", errText)
+	}
+	// Unknown board is rejected.
+	call(t, cs, "board_set_project", map[string]any{"board_id": "nope", "project": "/p/x"}, nil, true)
 }

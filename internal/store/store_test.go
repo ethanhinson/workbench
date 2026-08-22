@@ -2,10 +2,12 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 
 	"github.com/ethanhinson/kanban-mcp/internal/board"
+	_ "modernc.org/sqlite"
 )
 
 func newTestStore(t *testing.T) (*Store, *board.Plan) {
@@ -180,11 +182,11 @@ func TestCreatePlanByNameIsolation(t *testing.T) {
 	st, first := newTestStore(t) // seeds "Test Plan"
 	ctx := context.Background()
 
-	a, err := st.CreatePlan(ctx, "Board A", "", "sdd")
+	a, err := st.CreatePlan(ctx, "Board A", "", "", "sdd")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := st.CreatePlan(ctx, "Board B", "", "kanban")
+	b, err := st.CreatePlan(ctx, "Board B", "", "", "kanban")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +195,7 @@ func TestCreatePlanByNameIsolation(t *testing.T) {
 	}
 
 	// Idempotent by name: re-create "Board A" selects the same row.
-	again, err := st.CreatePlan(ctx, "Board A", "", "scrum")
+	again, err := st.CreatePlan(ctx, "Board A", "", "", "scrum")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +222,7 @@ func TestDeletePlanCascades(t *testing.T) {
 	st, keep := newTestStore(t)
 	ctx := context.Background()
 
-	victim, _ := st.CreatePlan(ctx, "Victim", "", "sdd")
+	victim, _ := st.CreatePlan(ctx, "Victim", "", "", "sdd")
 	i1, _ := st.CreateItem(ctx, "u", &board.Item{PlanID: victim.ID, Kind: board.KindStory, Title: "s1", LaneKey: "shared",
 		Labels: []board.Label{{NS: "priority", Value: "p0"}}})
 	i2, _ := st.CreateItem(ctx, "u", &board.Item{PlanID: victim.ID, Kind: board.KindTask, Title: "t1", LaneKey: "shared"})
@@ -276,7 +278,7 @@ func TestDeletePlanCascades(t *testing.T) {
 func TestRenamePlan(t *testing.T) {
 	st, keep := newTestStore(t)
 	ctx := context.Background()
-	other, _ := st.CreatePlan(ctx, "Other", "", "sdd")
+	other, _ := st.CreatePlan(ctx, "Other", "", "", "sdd")
 
 	if err := st.RenamePlan(ctx, keep.ID, "Renamed"); err != nil {
 		t.Fatal(err)
@@ -301,4 +303,135 @@ func TestRenamePlan(t *testing.T) {
 	if err := st.RenamePlan(ctx, "nope", "Whatever"); err == nil {
 		t.Fatal("expected error renaming a missing board")
 	}
+}
+
+// TestSetPlanProject covers moving a board between projects, the no-op case, the
+// name-clash rejection in the target project, and a missing board.
+func TestSetPlanProject(t *testing.T) {
+	st, _ := newTestStore(t)
+	ctx := context.Background()
+
+	// "auth" exists in two projects; a third board "auth" in the default project.
+	a, _ := st.CreatePlan(ctx, "auth", "/p/alpha", "", "sdd")
+	st.CreatePlan(ctx, "auth", "/p/beta", "", "sdd") // occupies "auth" in /p/beta
+
+	// Move a from /p/alpha to /p/gamma (free) — allowed.
+	if err := st.SetPlanProject(ctx, a.ID, "/p/gamma"); err != nil {
+		t.Fatalf("move to free project failed: %v", err)
+	}
+	got, _ := st.LoadPlan(ctx, a.ID)
+	if got.Project != "/p/gamma" {
+		t.Fatalf("project not updated, got %q", got.Project)
+	}
+
+	// Moving to a project that already has an "auth" board is rejected.
+	if err := st.SetPlanProject(ctx, a.ID, "/p/beta"); err == nil {
+		t.Fatal("expected clash: /p/beta already has an 'auth' board")
+	}
+	// Still in /p/gamma after the rejected move.
+	if got, _ := st.LoadPlan(ctx, a.ID); got.Project != "/p/gamma" {
+		t.Fatalf("board moved despite clash: %q", got.Project)
+	}
+
+	// Moving to the same project is a no-op.
+	if err := st.SetPlanProject(ctx, a.ID, "/p/gamma"); err != nil {
+		t.Fatalf("same-project move should be a no-op, got: %v", err)
+	}
+	// Missing board errors.
+	if err := st.SetPlanProject(ctx, "nope", "/p/x"); err == nil {
+		t.Fatal("expected error moving a missing board")
+	}
+}
+
+// TestMigrateOldSchemaAddsProject builds a database with the PRE-project schema
+// (project column absent, global UNIQUE(name)) and proves Open migrates it: the
+// project column appears, existing boards survive, the global unique constraint
+// is gone, and same-name-different-project now works.
+func TestMigrateOldSchemaAddsProject(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "old.db")
+
+	// Hand-build the old shape — plan with the global UNIQUE(name) AND a child
+	// table with a foreign key to plan(id), which is what makes the rebuild
+	// dangerous (a naive RENAME rewrites the FK to plan_old). Seed a board + a
+	// child row so post-migration FK-checked inserts are exercised.
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = raw.ExecContext(ctx, `
+		CREATE TABLE plan (
+			id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+			profile TEXT NOT NULL DEFAULT 'sdd', lane_dim TEXT NOT NULL DEFAULT 'agent',
+			policies TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+			UNIQUE (name)
+		);
+		CREATE TABLE item (
+			id TEXT PRIMARY KEY,
+			plan_id TEXT NOT NULL REFERENCES plan(id) ON DELETE CASCADE,
+			parent_id TEXT,
+			title TEXT NOT NULL,
+			column_key TEXT NOT NULL DEFAULT 'backlog',
+			lane_key TEXT,
+			ext_key TEXT NOT NULL DEFAULT ''
+		);
+		INSERT INTO plan(id,name,profile,lane_dim,policies,created_at,updated_at)
+		VALUES('p1','Shared','sdd','agent','{}','t','t');
+		INSERT INTO item(id,plan_id,title) VALUES('i1','p1','existing');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+
+	// Open runs the migration.
+	st, err := Open(path)
+	if err != nil {
+		t.Fatalf("migrate/open: %v", err)
+	}
+	defer st.Close()
+
+	// The old board survives and now has a (default empty) project.
+	old, err := st.LoadPlan(ctx, "p1")
+	if err != nil {
+		t.Fatalf("migrated board should load: %v", err)
+	}
+	if old.Name != "Shared" || old.Project != "" {
+		t.Fatalf("migrated board unexpected: %+v", old)
+	}
+
+	// No table may still reference the transient plan_old — the classic RENAME
+	// footgun. If the item FK was rewritten to plan_old, inserts would dangle.
+	var refs int
+	st.db.QueryRowContext(ctx,
+		`SELECT COUNT(1) FROM sqlite_master WHERE type='table' AND sql LIKE '%plan_old%'`).Scan(&refs)
+	if refs != 0 {
+		t.Fatalf("%d tables still reference plan_old after migration", refs)
+	}
+	// An FK-checked insert against the rebuilt plan must succeed.
+	if _, err := st.db.ExecContext(ctx,
+		`INSERT INTO item(id,plan_id,title) VALUES('i2','p1','after-migration')`); err != nil {
+		t.Fatalf("FK insert after migration failed: %v", err)
+	}
+
+	// The legacy global UNIQUE(name) is gone: same name under a different project
+	// is now allowed.
+	if _, err := st.CreatePlan(ctx, "Shared", "/dev/x", "", "sdd"); err != nil {
+		t.Fatalf("same name in a new project should be allowed post-migration: %v", err)
+	}
+	// Same (project,name) still de-dupes.
+	got, err := st.CreatePlan(ctx, "Shared", "", "", "sdd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "p1" {
+		t.Fatalf("CreatePlan should select the migrated board in the default project, got %s", got.ID)
+	}
+
+	// Re-opening an already-migrated db is a no-op (idempotent migration).
+	st.Close()
+	st2, err := Open(path)
+	if err != nil {
+		t.Fatalf("re-open migrated db: %v", err)
+	}
+	st2.Close()
 }

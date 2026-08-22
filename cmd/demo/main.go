@@ -37,7 +37,7 @@ func main() {
 	}
 	defer st.Close()
 
-	srv, mcpSrv, err := mcpserver.New(ctx, st, "Fuse Backlog", "agent", "docket")
+	srv, mcpSrv, err := mcpserver.New(ctx, st, "Fuse Backlog", "agent", "docket", "demo")
 	if err != nil {
 		log.Fatal(err)
 	}

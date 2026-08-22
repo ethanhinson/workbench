@@ -13,9 +13,11 @@ board_start "Auth work"   → board_id            an agent creates/selects a boa
  └─ item_move  → specifying → specd → …          drive it as the session progresses
 ```
 
-- **Many boards per database.** One SQLite file hosts many boards. `board_start`
-  creates or selects one by name (idempotent), so a session can run several boards
-  in parallel and switch between them in the UI. **Every tool names its `board_id`
+- **Many boards per database, grouped by project.** One SQLite file hosts many
+  boards; each board belongs to a **project** (by default the working directory, so
+  "a project is a directory"). `board_start` creates or selects a board by
+  `(project, name)` — idempotent — so the same board name can exist under different
+  projects, and the UI groups boards by project. **Every tool names its `board_id`
   explicitly — there is no hidden "active board."**
 - **The board owns live in-flight work.** Backlog, done, and ADRs are **decoupled
   read-only inputs**, projected in from an external source (docket today) via a
@@ -151,10 +153,11 @@ tools take an **`item_id`** and resolve the board from it.
 
 | Tool | Purpose |
 |------|---------|
-| `board_start` | **Start here.** Create/select a board by name → returns `board_id` (idempotent) |
-| `board_list` | List the boards in the db (id, name, profile, item count) |
+| `board_start` | **Start here.** Create/select a board by `(project, name)` → returns `board_id` (idempotent). Optional `project` (a dir path) defaults to the server's working directory |
+| `board_list` | List boards (id, name, project, profile, item count); optional `project` filter |
 | `board_delete` | Delete a board and everything on it (items, links, labels, comments) — irreversible |
-| `board_rename` | Rename a board (names are unique across the db) |
+| `board_rename` | Rename a board (names are unique within its project) |
+| `board_set_project` | Move a board to a different project (a directory path) |
 | `board_view` | Render one board (columns × lanes) — the single pane of glass |
 | `item_create` | Create an epic/story/task/bug/spike on a board; nest via `parent_id` |
 | `item_link` | Link two items: `depends_on` \| `related` \| `discovered_from` (flat, not nested) |
@@ -175,8 +178,11 @@ go build -o kanban-mcp ./cmd/kanban-mcp
 ./kanban-mcp --db ./runbook.db --agent alice
 ```
 
-An agent then calls `board_start` to create/select a board. (`--plan` still seeds a
-default board for single-board / back-compat use, but is no longer required.)
+An agent then calls `board_start` to create/select a board. Boards default to the
+project named by `--project` (or the server's working directory if unset), so with
+a global/shared db you can pass your project root — e.g. `board_start` with
+`project: $CLAUDE_PROJECT_DIR` — to keep each project's boards grouped. (`--plan`
+still seeds a default board for single-board / back-compat use, but isn't required.)
 
 Register with an MCP client (e.g. Claude Code `.mcp.json`):
 
@@ -191,7 +197,7 @@ Register with an MCP client (e.g. Claude Code `.mcp.json`):
 }
 ```
 
-Env var equivalents: `KANBAN_DB`, `KANBAN_PLAN`, `KANBAN_AGENT`, `KANBAN_DOCS_DIR`.
+Env var equivalents: `KANBAN_DB`, `KANBAN_PLAN`, `KANBAN_AGENT`, `KANBAN_PROJECT`, `KANBAN_DOCS_DIR`.
 
 ## Test
 

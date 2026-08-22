@@ -21,6 +21,7 @@ func main() {
 	var (
 		dbPath  = flag.String("db", envOr("KANBAN_DB", "kanban.db"), "path to the SQLite plan database")
 		plan    = flag.String("plan", envOr("KANBAN_PLAN", ""), "board to seed/focus; empty => don't seed a board (agents create boards at runtime via board_start)")
+		project = flag.String("project", envOr("KANBAN_PROJECT", ""), "default project (a directory path) new boards belong to; empty => the working directory")
 		agent   = flag.String("agent", envOr("KANBAN_AGENT", "agent"), "calling agent id (its default swim lane)")
 		profile = flag.String("profile", envOr("KANBAN_PROFILE", "sdd"), "methodology profile on first init: sdd|scrum|kanban")
 		httpAddr = flag.String("http", envOr("KANBAN_HTTP", ""), "serve the viz UI + JSON board API on this addr (e.g. :7777); empty disables")
@@ -41,8 +42,17 @@ func main() {
 	}
 	defer st.Close()
 
+	// Default project = the working directory, unless overridden. Boards created
+	// without an explicit project land here, so "a project is a directory" by default.
+	proj := *project
+	if proj == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			proj = cwd
+		}
+	}
+
 	ctx := context.Background()
-	srv, _, err := mcpserver.New(ctx, st, *plan, *agent, *profile)
+	srv, _, err := mcpserver.New(ctx, st, *plan, *agent, *profile, proj)
 	if err != nil {
 		log.Fatalf("build server: %v", err)
 	}
@@ -52,7 +62,7 @@ func main() {
 	// switches among all of them), so no empty placeholder board is created.
 	focusID := ""
 	if *plan != "" {
-		p, err := st.CreatePlan(ctx, *plan, "", *profile)
+		p, err := st.CreatePlan(ctx, *plan, proj, "", *profile)
 		if err != nil {
 			log.Fatalf("select board %q: %v", *plan, err)
 		}

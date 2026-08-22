@@ -9,6 +9,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ethanhinson/kanban-mcp/internal/board"
@@ -33,11 +34,120 @@ func Open(path string) (*Store, error) {
 	}
 	// modernc sqlite is safe for concurrent use; a small pool avoids "database locked".
 	db.SetMaxOpenConns(1) // single writer keeps WAL semantics simple for multi-agent writes
+	if err := migrate(context.Background(), db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
 	if _, err := db.ExecContext(context.Background(), schemaSQL); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
 	return &Store{db: db, broker: newBroker()}, nil
+}
+
+// migrate brings a pre-existing database up to the current schema before the
+// idempotent schema.sql runs. Today it upgrades the boards-per-project model:
+// older `plan` tables lack the `project` column and carry a global UNIQUE(name)
+// constraint that must become per-project. Runs before schema.sql so the new
+// CREATE UNIQUE INDEX on (project, name) can succeed.
+func migrate(ctx context.Context, db *sql.DB) error {
+	// Is there an existing plan table? (Empty/new db → nothing to migrate.)
+	var planSQL string
+	err := db.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type='table' AND name='plan'`).Scan(&planSQL)
+	if err == sql.ErrNoRows {
+		return nil // fresh db; schema.sql creates the current shape
+	}
+	if err != nil {
+		return err
+	}
+
+	// 1) Add the project column if it's missing.
+	hasProject := false
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(plan)`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "project" {
+			hasProject = true
+		}
+	}
+	rows.Close()
+	if !hasProject {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE plan ADD COLUMN project TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+
+	// 2) Drop the legacy global UNIQUE(name). SQLite can't ALTER away a table-level
+	// constraint, so rebuild the table without it when the old DDL still has it.
+	// The per-project uniqueness is (re)created by schema.sql's index afterward.
+	//
+	// This follows SQLite's supported table-rebuild procedure. Critically,
+	// legacy_alter_table MUST be ON for the rebuild: with the modern default (OFF),
+	// `ALTER TABLE plan RENAME TO plan_old` rewrites child tables' REFERENCES
+	// plan(id) to point at plan_old, which then dangles after we drop plan_old
+	// (any FK-checked INSERT fails with "no such table: plan_old"). With legacy
+	// mode on, RENAME leaves child references naming "plan", so the new plan table
+	// satisfies them. foreign_keys is also disabled so the transient rename can't
+	// trip enforcement. Neither pragma can be toggled inside a transaction.
+	if strings.Contains(planSQL, "UNIQUE (name)") || strings.Contains(planSQL, "UNIQUE(name)") {
+		if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx, `PRAGMA legacy_alter_table=ON`); err != nil {
+			return err
+		}
+		rebuild := func() error {
+			tx, err := db.BeginTx(ctx, nil)
+			if err != nil {
+				return err
+			}
+			defer tx.Rollback()
+			stmts := []string{
+				`ALTER TABLE plan RENAME TO plan_old`,
+				`CREATE TABLE plan (
+					id          TEXT PRIMARY KEY,
+					name        TEXT NOT NULL,
+					project     TEXT NOT NULL DEFAULT '',
+					description TEXT NOT NULL DEFAULT '',
+					profile     TEXT NOT NULL DEFAULT 'sdd',
+					lane_dim    TEXT NOT NULL DEFAULT 'agent',
+					policies    TEXT NOT NULL DEFAULT '{}',
+					created_at  TEXT NOT NULL,
+					updated_at  TEXT NOT NULL
+				)`,
+				`INSERT INTO plan(id,name,project,description,profile,lane_dim,policies,created_at,updated_at)
+				 SELECT id,name,project,description,profile,lane_dim,policies,created_at,updated_at FROM plan_old`,
+				`DROP TABLE plan_old`,
+			}
+			for _, q := range stmts {
+				if _, err := tx.ExecContext(ctx, q); err != nil {
+					return fmt.Errorf("rebuild plan: %w", err)
+				}
+			}
+			return tx.Commit()
+		}
+		err := rebuild()
+		// Restore pragmas regardless of the rebuild outcome.
+		db.ExecContext(ctx, `PRAGMA legacy_alter_table=OFF`)
+		if _, e2 := db.ExecContext(ctx, `PRAGMA foreign_keys=ON`); e2 != nil && err == nil {
+			err = e2
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Broker returns the store's change-notification broker. Consumers (the SSE
@@ -61,32 +171,34 @@ func now() string    { return time.Now().UTC().Format(time.RFC3339) }
 func newID() string  { return ulid.Make().String() }
 
 // EnsurePlan is the single-board convenience: it returns the first plan in the db
-// (whatever its name), creating one from the named profile if the db is empty. It
-// exists for callers that treat the file as one board. Multi-board callers use
-// CreatePlan / GetPlanByName instead. An unknown profileKey falls back to "sdd".
+// (whatever its name), creating one (in the default "" project) from the named
+// profile if the db is empty. It exists for callers that treat the file as one
+// board. Multi-board callers use CreatePlan / GetPlanByName instead. An unknown
+// profileKey falls back to "sdd".
 func (s *Store) EnsurePlan(ctx context.Context, name, description, profileKey string) (*board.Plan, error) {
 	var p board.Plan
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, name, description, profile, lane_dim, policies, created_at, updated_at FROM plan ORDER BY created_at LIMIT 1`)
-	err := row.Scan(&p.ID, &p.Name, &p.Description, &p.ProfileKey, &p.LaneDimension, &p.PoliciesJSON, &p.CreatedAt, &p.UpdatedAt)
+		`SELECT id,name,project,description,profile,lane_dim,policies,created_at,updated_at FROM plan ORDER BY created_at LIMIT 1`)
+	err := row.Scan(&p.ID, &p.Name, &p.Project, &p.Description, &p.ProfileKey, &p.LaneDimension, &p.PoliciesJSON, &p.CreatedAt, &p.UpdatedAt)
 	if err == nil {
 		return &p, nil // existing plan keeps its profile; profileKey arg is ignored
 	}
 	if err != sql.ErrNoRows {
 		return nil, err
 	}
-	return s.CreatePlan(ctx, name, description, profileKey)
+	return s.CreatePlan(ctx, name, "", description, profileKey)
 }
 
-// CreatePlan creates a board (plan) from the named methodology profile, seeding
-// its columns, seed lanes, lane dimension, and enforcement policies — the profile
-// is what binds meaning to both board axes (see board.Profile). It is idempotent
-// by name: starting a board that already exists returns the existing one rather
-// than erroring. An unknown profileKey falls back to "sdd". This is the store
-// primitive behind the agent-facing board_start tool.
-func (s *Store) CreatePlan(ctx context.Context, name, description, profileKey string) (*board.Plan, error) {
-	if existing, err := s.GetPlanByName(ctx, name); err == nil {
-		return existing, nil // idempotent: board_start on an existing name selects it
+// CreatePlan creates a board (plan) in a project from the named methodology
+// profile, seeding its columns, seed lanes, lane dimension, and enforcement
+// policies — the profile is what binds meaning to both board axes (see
+// board.Profile). It is idempotent by (project, name): starting a board that
+// already exists in that project returns the existing one rather than erroring, so
+// the same name can exist under different projects. An unknown profileKey falls
+// back to "sdd". This is the store primitive behind the agent-facing board_start.
+func (s *Store) CreatePlan(ctx context.Context, name, project, description, profileKey string) (*board.Plan, error) {
+	if existing, err := s.GetPlanByName(ctx, project, name); err == nil {
+		return existing, nil // idempotent: board_start on an existing (project,name) selects it
 	} else if err != sql.ErrNoRows {
 		return nil, err
 	}
@@ -108,13 +220,13 @@ func (s *Store) CreatePlan(ctx context.Context, name, description, profileKey st
 
 	ts := now()
 	p := board.Plan{
-		ID: newID(), Name: name, Description: description,
+		ID: newID(), Name: name, Project: project, Description: description,
 		ProfileKey: prof.Key, LaneDimension: string(prof.LaneDimension), PoliciesJSON: string(policiesJSON),
 		CreatedAt: ts, UpdatedAt: ts,
 	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO plan(id,name,description,profile,lane_dim,policies,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`,
-		p.ID, p.Name, p.Description, p.ProfileKey, p.LaneDimension, p.PoliciesJSON, p.CreatedAt, p.UpdatedAt); err != nil {
+		`INSERT INTO plan(id,name,project,description,profile,lane_dim,policies,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+		p.ID, p.Name, p.Project, p.Description, p.ProfileKey, p.LaneDimension, p.PoliciesJSON, p.CreatedAt, p.UpdatedAt); err != nil {
 		return nil, err
 	}
 	for _, c := range prof.Columns {
@@ -143,13 +255,14 @@ func (s *Store) CreatePlan(ctx context.Context, name, description, profileKey st
 	return &p, nil
 }
 
-// GetPlanByName resolves a board by its unique name. Returns sql.ErrNoRows if no
-// board with that name exists (callers distinguish "absent" from a real error).
-func (s *Store) GetPlanByName(ctx context.Context, name string) (*board.Plan, error) {
+// GetPlanByName resolves a board by (project, name) — names are unique within a
+// project. Returns sql.ErrNoRows if absent (callers distinguish "absent" from a
+// real error).
+func (s *Store) GetPlanByName(ctx context.Context, project, name string) (*board.Plan, error) {
 	var p board.Plan
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id,name,description,profile,lane_dim,policies,created_at,updated_at FROM plan WHERE name=?`, name).
-		Scan(&p.ID, &p.Name, &p.Description, &p.ProfileKey, &p.LaneDimension, &p.PoliciesJSON, &p.CreatedAt, &p.UpdatedAt)
+		`SELECT id,name,project,description,profile,lane_dim,policies,created_at,updated_at FROM plan WHERE project=? AND name=?`, project, name).
+		Scan(&p.ID, &p.Name, &p.Project, &p.Description, &p.ProfileKey, &p.LaneDimension, &p.PoliciesJSON, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -160,17 +273,35 @@ func (s *Store) GetPlanByName(ctx context.Context, name string) (*board.Plan, er
 type PlanSummary struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
+	Project    string `json:"project"`
 	ProfileKey string `json:"profile"`
 	Items      int    `json:"items"`
 	CreatedAt  string `json:"created_at"`
 }
 
-// ListPlans returns every board in the db with a cheap item count, newest last.
+// ListPlans returns boards with a cheap item count, newest last. When project is
+// non-empty it returns only that project's boards; "" returns every board (grouped
+// by project for a UI to render). ByProject controls the filter explicitly so ""
+// can still mean the default/unnamed project vs "all".
 func (s *Store) ListPlans(ctx context.Context) ([]PlanSummary, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT p.id, p.name, p.profile, p.created_at, COUNT(i.id)
-		 FROM plan p LEFT JOIN item i ON i.plan_id = p.id
-		 GROUP BY p.id ORDER BY p.created_at`)
+	return s.listPlans(ctx, "", false)
+}
+
+// ListPlansForProject returns only the given project's boards.
+func (s *Store) ListPlansForProject(ctx context.Context, project string) ([]PlanSummary, error) {
+	return s.listPlans(ctx, project, true)
+}
+
+func (s *Store) listPlans(ctx context.Context, project string, filter bool) ([]PlanSummary, error) {
+	q := `SELECT p.id, p.name, p.project, p.profile, p.created_at, COUNT(i.id)
+	      FROM plan p LEFT JOIN item i ON i.plan_id = p.id`
+	var args []any
+	if filter {
+		q += ` WHERE p.project = ?`
+		args = append(args, project)
+	}
+	q += ` GROUP BY p.id ORDER BY p.project, p.created_at`
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +309,7 @@ func (s *Store) ListPlans(ctx context.Context) ([]PlanSummary, error) {
 	var out []PlanSummary
 	for rows.Next() {
 		var ps PlanSummary
-		if err := rows.Scan(&ps.ID, &ps.Name, &ps.ProfileKey, &ps.CreatedAt, &ps.Items); err != nil {
+		if err := rows.Scan(&ps.ID, &ps.Name, &ps.Project, &ps.ProfileKey, &ps.CreatedAt, &ps.Items); err != nil {
 			return nil, err
 		}
 		out = append(out, ps)
@@ -222,34 +353,70 @@ func (s *Store) DeletePlan(ctx context.Context, planID string) error {
 	return s.commit(tx)
 }
 
-// RenamePlan changes a board's name. Board names are unique (board_start selects
-// by name), so a clash returns a clear error rather than a raw constraint failure.
-// Returns an error if the board doesn't exist.
+// RenamePlan changes a board's name. Names are unique within a project, so a clash
+// is checked against the board's OWN project and returns a clear error rather than
+// a raw constraint failure. Returns an error if the board doesn't exist.
 func (s *Store) RenamePlan(ctx context.Context, planID, newName string) error {
 	if newName == "" {
 		return fmt.Errorf("new board name is required")
 	}
-	// Reject a name already taken by a different board (before hitting the UNIQUE
-	// index, so the message names the conflict).
+	var project string
+	if err := s.db.QueryRowContext(ctx, `SELECT project FROM plan WHERE id=?`, planID).Scan(&project); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("board %q not found", planID)
+		}
+		return err
+	}
+	// Reject a name already taken by a different board in the same project.
 	var clashID string
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM plan WHERE name=?`, newName).Scan(&clashID)
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM plan WHERE project=? AND name=?`, project, newName).Scan(&clashID)
 	switch {
 	case err == nil && clashID != planID:
-		return fmt.Errorf("a board named %q already exists", newName)
+		return fmt.Errorf("a board named %q already exists in this project", newName)
 	case err == nil:
 		return nil // same board already has this name: no-op
 	case err != sql.ErrNoRows:
 		return err
 	}
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE plan SET name=?, updated_at=? WHERE id=?`, newName, now(), planID)
-	if err != nil {
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE plan SET name=?, updated_at=? WHERE id=?`, newName, now(), planID); err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("board %q not found", planID)
-	}
 	s.broker.notify() // live UI + sidebar reflect the new name
+	return nil
+}
+
+// SetPlanProject moves a board to a different project. Because board names are
+// unique within a project, the move is rejected if the target project already has
+// a board with this board's name (a raw constraint failure would otherwise be
+// opaque). Moving a board to the project it's already in is a no-op. Returns an
+// error if the board doesn't exist.
+func (s *Store) SetPlanProject(ctx context.Context, planID, newProject string) error {
+	var name, curProject string
+	err := s.db.QueryRowContext(ctx, `SELECT name, project FROM plan WHERE id=?`, planID).Scan(&name, &curProject)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("board %q not found", planID)
+		}
+		return err
+	}
+	if newProject == curProject {
+		return nil // already there
+	}
+	// Reject if another board in the target project already has this name.
+	var clashID string
+	err = s.db.QueryRowContext(ctx, `SELECT id FROM plan WHERE project=? AND name=?`, newProject, name).Scan(&clashID)
+	switch {
+	case err == nil && clashID != planID:
+		return fmt.Errorf("project %q already has a board named %q", newProject, name)
+	case err != nil && err != sql.ErrNoRows:
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE plan SET project=?, updated_at=? WHERE id=?`, newProject, now(), planID); err != nil {
+		return err
+	}
+	s.broker.notify() // live UI + sidebar re-group under the new project
 	return nil
 }
 
@@ -257,8 +424,8 @@ func (s *Store) RenamePlan(ctx context.Context, planID, newName string) error {
 func (s *Store) LoadPlan(ctx context.Context, planID string) (*board.Plan, error) {
 	var p board.Plan
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id,name,description,profile,lane_dim,policies,created_at,updated_at FROM plan WHERE id=?`, planID).
-		Scan(&p.ID, &p.Name, &p.Description, &p.ProfileKey, &p.LaneDimension, &p.PoliciesJSON, &p.CreatedAt, &p.UpdatedAt)
+		`SELECT id,name,project,description,profile,lane_dim,policies,created_at,updated_at FROM plan WHERE id=?`, planID).
+		Scan(&p.ID, &p.Name, &p.Project, &p.Description, &p.ProfileKey, &p.LaneDimension, &p.PoliciesJSON, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}

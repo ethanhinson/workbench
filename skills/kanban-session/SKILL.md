@@ -47,12 +47,18 @@ project MCP config wasn't approved — re-open the project and approve it.
 (The item-addressed tools — move/set_spec/set_blocked/label/comment — take
 `item_id` and resolve the board from the item, so they don't need `board_id`.)
 
+**Boards are grouped by project** (a directory path; defaults to the working
+directory). Since the server is shared across projects, pass `project` to
+`board_start` — set it to your project root (e.g. `$CLAUDE_PROJECT_DIR`) — so this
+session's boards are grouped under it rather than the server's cwd.
+
 | Tool | Use it to |
 |---|---|
-| `board_start` | **Start here.** Create/select a board by name → returns `board_id`. Optional `profile` (sdd\|scrum\|kanban). Idempotent by name. |
-| `board_list` | List boards in the db (id, name, profile, item count) to pick or resume one. |
+| `board_start` | **Start here.** Create/select a board by `(project, name)` → returns `board_id`. Optional `project` (dir path, defaults to cwd) + `profile` (sdd\|scrum\|kanban). Idempotent per (project, name). |
+| `board_list` | List boards (id, name, project, profile, item count); pass `project` to list just one project's boards. |
 | `board_delete` | Delete a board (`board_id`) and everything on it — irreversible. Clean up throwaway/finished boards. |
-| `board_rename` | Rename a board (`board_id`, `name`) — names are unique across the db. |
+| `board_rename` | Rename a board (`board_id`, `name`) — names are unique within a project. |
+| `board_set_project` | Move a board (`board_id`, `project`) to a different project — e.g. re-home an older board under its repo. |
 | `board_view` | See one board (`board_id`) as columns × lanes before planning or moving work. |
 | `item_create` | Add an item (`board_id` + `epic\|story\|task\|bug\|spike`). Nest with `parent_id`. |
 | `item_link` | Link two items (`board_id`, `from_id`, `to_id`, `kind`: depends_on\|related\|discovered_from). Flat, not nested. |
@@ -72,7 +78,9 @@ invalid moves, so you can't drift the board out of policy.
 ## Working the board during a session
 
 1. **Start it.** `board_start` with a name for what you're building (e.g. the
-   deliverable, or the session topic). Keep the returned `board_id`.
+   deliverable, or the session topic) and `project` set to your project root
+   (`$CLAUDE_PROJECT_DIR`) so it's grouped with this project. Keep the returned
+   `board_id`.
 2. **Frame the work.** `item_create` a `story` (or `epic` for a big slice) on that
    `board_id`; it lands in `backlog`. Break out `task` children with `parent_id`.
 3. **Wire dependencies.** `item_link` tasks that block each other (`depends_on`) or

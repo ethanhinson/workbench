@@ -185,7 +185,7 @@ func TestImportOntoNamedBoardWhenOthersExist(t *testing.T) {
 	existing, _ := st.EnsurePlan(ctx, "Plan", "", "sdd")
 
 	// Import targets a differently-named board, resolved by name.
-	target, err := st.CreatePlan(ctx, "fuse: docket backlog", "", "docket")
+	target, err := st.CreatePlan(ctx, "fuse: docket backlog", "", "", "docket")
 	if err != nil {
 		t.Fatal(err)
 	}

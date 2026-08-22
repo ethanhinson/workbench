@@ -23,6 +23,7 @@ type Server struct {
 	st             *store.Store
 	agentID        string // this server instance's owning agent; event attribution + default lane
 	defaultProfile string // profile used when board_start omits one
+	defaultProject string // project boards land in when board_start omits one (a dir path)
 	defaultBoardID string // board seeded at New() time; what PlanID() reports
 }
 
@@ -33,13 +34,15 @@ func (s *Server) PlanID() string { return s.defaultBoardID }
 
 // New builds an MCP server over the given db. agentID identifies the agent driving
 // this instance. profileKey is the default methodology (sdd|scrum|kanban|...) used
-// for any board_start that omits a profile.
+// for any board_start that omits a profile. defaultProject is the project boards
+// land in when board_start doesn't name one — by default the server's working
+// directory, so one shared db groups boards by project.
 //
-// planName controls the connect-time seed: pass a name to seed that one board
-// (single-board / back-compat use, reported via PlanID()), or pass "" to seed
-// NOTHING — the runtime-board model, where the agent creates boards on demand with
-// board_start and no empty default board is left lying around.
-func New(ctx context.Context, st *store.Store, planName, agentID, profileKey string) (*mcp.Server, *Server, error) {
+// planName controls the connect-time seed: pass a name to seed that one board in
+// defaultProject (single-board / back-compat use, reported via PlanID()), or pass
+// "" to seed NOTHING — the runtime-board model, where the agent creates boards on
+// demand with board_start and no empty default board is left lying around.
+func New(ctx context.Context, st *store.Store, planName, agentID, profileKey, defaultProject string) (*mcp.Server, *Server, error) {
 	if agentID == "" {
 		agentID = "agent"
 	}
@@ -47,9 +50,9 @@ func New(ctx context.Context, st *store.Store, planName, agentID, profileKey str
 		profileKey = "sdd"
 	}
 
-	s := &Server{st: st, agentID: agentID, defaultProfile: profileKey}
+	s := &Server{st: st, agentID: agentID, defaultProfile: profileKey, defaultProject: defaultProject}
 	if planName != "" {
-		plan, err := st.CreatePlan(ctx, planName, "", profileKey)
+		plan, err := st.CreatePlan(ctx, planName, defaultProject, "", profileKey)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -96,14 +99,17 @@ func (s *Server) register(srv *mcp.Server) {
 		Name: "board_start",
 		Description: "Start a board: create a named board (or select it if it already exists) and get " +
 			"back its board_id. This is the entry point — call it first, then pass the returned board_id to " +
-			"every other tool. Optionally pick a methodology profile (sdd|scrum|kanban); defaults to the " +
-			"server default. Idempotent by name, so re-starting the same name re-selects the same board.",
+			"every other tool. A board belongs to a project (a directory path); pass project (e.g. your " +
+			"$CLAUDE_PROJECT_DIR) to group this session's boards under it, or omit it to use the server's " +
+			"working directory. Optionally pick a methodology profile (sdd|scrum|kanban). Idempotent by " +
+			"(project, name), so re-starting the same name in the same project re-selects the same board.",
 	}, s.boardStart)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "board_list",
-		Description: "List the boards in this database (id, name, profile, item count) so you can pick a " +
-			"board_id to work against or resume an earlier one.",
+		Description: "List boards (id, name, project, profile, item count) so you can pick a board_id to work " +
+			"against or resume one. Pass project (a directory path) to list only that project's boards; omit " +
+			"it to list every board grouped by project.",
 	}, s.boardList)
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -114,9 +120,16 @@ func (s *Server) register(srv *mcp.Server) {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "board_rename",
-		Description: "Rename a board (board_id) to a new name. Names are unique across the db; renaming " +
-			"to a name already in use is rejected.",
+		Description: "Rename a board (board_id) to a new name. Names are unique within a project; renaming " +
+			"to a name already in use in that project is rejected.",
 	}, s.boardRename)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "board_set_project",
+		Description: "Move a board (board_id) to a different project (a directory path). Use to (re)assign a " +
+			"board's project, e.g. to group an older board under its repo. Rejected if the target project " +
+			"already has a board with this name.",
+	}, s.boardSetProject)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "board_view",
@@ -197,11 +210,13 @@ func (s *Server) register(srv *mcp.Server) {
 type boardStartIn struct {
 	Name    string `json:"name" jsonschema:"human name for the board, e.g. this session's deliverable"`
 	Profile string `json:"profile,omitempty" jsonschema:"methodology profile sdd|scrum|kanban; defaults to the server default"`
+	Project string `json:"project,omitempty" jsonschema:"project this board belongs to (a directory path); defaults to the working directory. Pass your project root, e.g. $CLAUDE_PROJECT_DIR, to group this session's boards under it"`
 }
 
 type boardStartOut struct {
 	BoardID string `json:"board_id"`
 	Name    string `json:"name"`
+	Project string `json:"project"`
 	Profile string `json:"profile"`
 	Message string `json:"message"`
 }
@@ -214,7 +229,11 @@ func (s *Server) boardStart(ctx context.Context, _ *mcp.CallToolRequest, in boar
 	if profile == "" {
 		profile = s.defaultProfile
 	}
-	plan, err := s.st.CreatePlan(ctx, in.Name, "", profile)
+	project := in.Project
+	if project == "" {
+		project = s.defaultProject
+	}
+	plan, err := s.st.CreatePlan(ctx, in.Name, project, "", profile)
 	if err != nil {
 		return nil, boardStartOut{}, err
 	}
@@ -222,19 +241,27 @@ func (s *Server) boardStart(ctx context.Context, _ *mcp.CallToolRequest, in boar
 		return nil, boardStartOut{}, err
 	}
 	return nil, boardStartOut{
-		BoardID: plan.ID, Name: plan.Name, Profile: plan.ProfileKey,
-		Message: fmt.Sprintf("board %q ready — pass board_id=%s to the other tools", plan.Name, plan.ID),
+		BoardID: plan.ID, Name: plan.Name, Project: plan.Project, Profile: plan.ProfileKey,
+		Message: fmt.Sprintf("board %q ready in project %q — pass board_id=%s to the other tools", plan.Name, plan.Project, plan.ID),
 	}, nil
 }
 
-type boardListIn struct{}
+type boardListIn struct {
+	Project string `json:"project,omitempty" jsonschema:"only list boards in this project (a directory path); omit to list every board grouped by project"`
+}
 
 type boardListOut struct {
 	Boards []store.PlanSummary `json:"boards"`
 }
 
-func (s *Server) boardList(ctx context.Context, _ *mcp.CallToolRequest, _ boardListIn) (*mcp.CallToolResult, boardListOut, error) {
-	boards, err := s.st.ListPlans(ctx)
+func (s *Server) boardList(ctx context.Context, _ *mcp.CallToolRequest, in boardListIn) (*mcp.CallToolResult, boardListOut, error) {
+	var boards []store.PlanSummary
+	var err error
+	if in.Project != "" {
+		boards, err = s.st.ListPlansForProject(ctx, in.Project)
+	} else {
+		boards, err = s.st.ListPlans(ctx)
+	}
 	if err != nil {
 		return nil, boardListOut{}, err
 	}
@@ -258,7 +285,7 @@ func (s *Server) boardDelete(ctx context.Context, _ *mcp.CallToolRequest, in boa
 
 type boardRenameIn struct {
 	BoardID string `json:"board_id" jsonschema:"the board to rename (from board_list)"`
-	Name    string `json:"name" jsonschema:"the new board name (must be unique across the db)"`
+	Name    string `json:"name" jsonschema:"the new board name (must be unique within the board's project)"`
 }
 
 func (s *Server) boardRename(ctx context.Context, _ *mcp.CallToolRequest, in boardRenameIn) (*mcp.CallToolResult, itemOut, error) {
@@ -270,6 +297,22 @@ func (s *Server) boardRename(ctx context.Context, _ *mcp.CallToolRequest, in boa
 		return nil, itemOut{}, err
 	}
 	return nil, itemOut{ID: plan.ID, Message: fmt.Sprintf("renamed %q -> %q", plan.Name, in.Name)}, nil
+}
+
+type boardSetProjectIn struct {
+	BoardID string `json:"board_id" jsonschema:"the board to move (from board_list)"`
+	Project string `json:"project" jsonschema:"the target project (a directory path)"`
+}
+
+func (s *Server) boardSetProject(ctx context.Context, _ *mcp.CallToolRequest, in boardSetProjectIn) (*mcp.CallToolResult, itemOut, error) {
+	plan, err := s.resolveBoard(ctx, in.BoardID)
+	if err != nil {
+		return nil, itemOut{}, err
+	}
+	if err := s.st.SetPlanProject(ctx, plan.ID, in.Project); err != nil {
+		return nil, itemOut{}, err
+	}
+	return nil, itemOut{ID: plan.ID, Message: fmt.Sprintf("moved %q to project %q", plan.Name, in.Project)}, nil
 }
 
 type boardViewIn struct {

@@ -7,19 +7,24 @@ PRAGMA journal_mode = WAL;      -- concurrent agents: readers don't block the wr
 PRAGMA foreign_keys = ON;
 PRAGMA busy_timeout = 5000;     -- wait rather than fail when another agent holds the write lock
 
--- Boards. Each row is one board (plan) in this database. board_start is
--- idempotent by name, so name is unique — starting an existing board selects it.
+-- Boards. Each row is one board (plan) in this database. A board belongs to a
+-- project (by default a directory path); board names are unique WITHIN a project,
+-- so two projects can each have a board named "auth work". board_start is
+-- idempotent by (project, name) — starting an existing board selects it.
 CREATE TABLE IF NOT EXISTS plan (
     id          TEXT PRIMARY KEY,          -- ulid
     name        TEXT NOT NULL,
+    project     TEXT NOT NULL DEFAULT '',  -- owning project (a directory path by default)
     description TEXT NOT NULL DEFAULT '',
     profile     TEXT NOT NULL DEFAULT 'sdd', -- active methodology profile (sdd|scrum|kanban|custom)
     lane_dim    TEXT NOT NULL DEFAULT 'agent', -- what a swim lane means under this profile
     policies    TEXT NOT NULL DEFAULT '{}',  -- JSON-encoded board.Policies (the enforcement rules)
     created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL,
-    UNIQUE (name)
+    updated_at  TEXT NOT NULL
 );
+-- Board name is unique per project (not globally), enforced by index so it works
+-- for both fresh and migrated databases.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_project_name ON plan(project, name);
 
 -- Workflow columns (stages). Seeded with SDD-opinionated defaults, overridable.
 CREATE TABLE IF NOT EXISTS column_def (
