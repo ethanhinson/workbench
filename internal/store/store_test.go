@@ -173,3 +173,100 @@ func TestWIPLimit(t *testing.T) {
 		t.Fatal("expected WIP limit to block the move")
 	}
 }
+
+// TestCreatePlanByNameIsolation proves many boards coexist in one db, are
+// addressed independently, and CreatePlan is idempotent by name (select, not dup).
+func TestCreatePlanByNameIsolation(t *testing.T) {
+	st, first := newTestStore(t) // seeds "Test Plan"
+	ctx := context.Background()
+
+	a, err := st.CreatePlan(ctx, "Board A", "", "sdd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := st.CreatePlan(ctx, "Board B", "", "kanban")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.ID == b.ID || a.ID == first.ID {
+		t.Fatal("distinct names must yield distinct boards")
+	}
+
+	// Idempotent by name: re-create "Board A" selects the same row.
+	again, err := st.CreatePlan(ctx, "Board A", "", "scrum")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.ID != a.ID {
+		t.Fatalf("CreatePlan by existing name should select, got new id %s", again.ID)
+	}
+
+	// Items on A don't leak to B.
+	st.CreateItem(ctx, "u", &board.Item{PlanID: a.ID, Kind: board.KindTask, Title: "on A", LaneKey: "shared"})
+	itemsB, _ := st.ListItems(ctx, b.ID, Filter{})
+	if len(itemsB) != 0 {
+		t.Fatalf("board B should be empty, got %d", len(itemsB))
+	}
+
+	boards, _ := st.ListPlans(ctx)
+	if len(boards) != 3 {
+		t.Fatalf("want 3 boards (Test Plan + A + B), got %d", len(boards))
+	}
+}
+
+// TestDeletePlanCascades proves deleting a board removes its items, links,
+// labels, and events, leaves other boards untouched, and errors on a bad id.
+func TestDeletePlanCascades(t *testing.T) {
+	st, keep := newTestStore(t)
+	ctx := context.Background()
+
+	victim, _ := st.CreatePlan(ctx, "Victim", "", "sdd")
+	i1, _ := st.CreateItem(ctx, "u", &board.Item{PlanID: victim.ID, Kind: board.KindStory, Title: "s1", LaneKey: "shared",
+		Labels: []board.Label{{NS: "priority", Value: "p0"}}})
+	i2, _ := st.CreateItem(ctx, "u", &board.Item{PlanID: victim.ID, Kind: board.KindTask, Title: "t1", LaneKey: "shared"})
+	if err := st.AddLink(ctx, victim.ID, i2.ID, i1.ID, "depends_on"); err != nil {
+		t.Fatal(err)
+	}
+	// An item on the board we keep, to prove isolation.
+	keepItem, _ := st.CreateItem(ctx, "u", &board.Item{PlanID: keep.ID, Kind: board.KindTask, Title: "keep", LaneKey: "shared"})
+
+	if err := st.DeletePlan(ctx, victim.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Board gone.
+	if _, err := st.LoadPlan(ctx, victim.ID); err == nil {
+		t.Fatal("deleted board should not load")
+	}
+	// Its rows gone (query the raw tables).
+	for _, q := range []struct {
+		table, where string
+		arg          string
+	}{
+		{"item", "plan_id", victim.ID},
+		{"link", "plan_id", victim.ID},
+		{"event", "plan_id", victim.ID},
+		{"lane", "plan_id", victim.ID},
+		{"column_def", "plan_id", victim.ID},
+		{"label", "item_id", i1.ID},
+	} {
+		var n int
+		st.db.QueryRowContext(ctx, "SELECT COUNT(1) FROM "+q.table+" WHERE "+q.where+"=?", q.arg).Scan(&n)
+		if n != 0 {
+			t.Fatalf("%s rows for deleted board remain: %d", q.table, n)
+		}
+	}
+	// The kept board is untouched.
+	if _, err := st.LoadPlan(ctx, keep.ID); err != nil {
+		t.Fatalf("kept board should survive: %v", err)
+	}
+	items, _ := st.ListItems(ctx, keep.ID, Filter{})
+	if len(items) != 1 || items[0].ID != keepItem.ID {
+		t.Fatalf("kept board's items should survive, got %+v", items)
+	}
+
+	// Deleting a nonexistent board errors.
+	if err := st.DeletePlan(ctx, "nope"); err == nil {
+		t.Fatal("deleting a missing board should error")
+	}
+}

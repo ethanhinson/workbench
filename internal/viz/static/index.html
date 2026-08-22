@@ -36,7 +36,26 @@
   .tab.active { color:var(--fg); background:var(--panel); border-color:var(--line); border-bottom-color:var(--panel); }
   .tab .count { font-size:11px; color:var(--muted); margin-left:6px; }
   .stats { display:flex; gap:12px; font-size:12px; color:var(--muted); }
-  /* the board fills the viewport below the header; lanes scroll internally */
+  /* main row below the header: boards sidebar on the left, current board fills the rest */
+  .main { flex:1 1 auto; min-height:0; display:flex; }
+  .content { flex:1 1 auto; min-width:0; min-height:0; display:flex; flex-direction:column; }
+  /* boards sidebar: a persistent list of every board in the db; click to switch */
+  .sidebar { flex:0 0 210px; min-height:0; overflow-y:auto; border-right:1px solid var(--line);
+             background:#0c0e12; display:flex; flex-direction:column; transition:flex-basis .12s ease; }
+  .sidebar.collapsed { flex-basis:0; overflow:hidden; border-right:none; }
+  .sb-head { display:flex; align-items:center; gap:8px; padding:10px 12px 6px; font-size:11px;
+             text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+  .sb-head .count { margin-left:auto; }
+  .sb-item { padding:8px 12px; cursor:pointer; border-left:2px solid transparent; }
+  .sb-item:hover { background:#12151c; }
+  .sb-item.active { background:#12161e; border-left-color:#2f81f7; }
+  .sb-name { font-size:13px; font-weight:500; color:var(--fg); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sb-meta { display:flex; align-items:center; gap:8px; margin-top:3px; font-size:11px; color:var(--muted); }
+  .sb-dot { width:6px; height:6px; border-radius:999px; background:#2f81f7; flex:0 0 auto; }
+  .sb-toggle { cursor:pointer; color:var(--muted); border:1px solid var(--line); border-radius:6px;
+               padding:2px 8px; font-size:12px; user-select:none; }
+  .sb-toggle:hover { color:var(--fg); }
+  /* the board fills the content area below the header; lanes scroll internally */
   .board { padding:12px; flex:1 1 auto; min-height:0; overflow-x:auto; overflow-y:hidden; display:flex; }
   /* vertical swim lanes (classic kanban): full-height columns, cards stack + scroll */
   .lanes { display:flex; gap:12px; align-items:stretch; flex:1 1 auto; min-height:0; }
@@ -125,6 +144,7 @@
 </head>
 <body>
 <header>
+  <span class="sb-toggle" id="sb-toggle" title="Toggle boards sidebar">☰</span>
   <h1>kanban-mcp</h1>
   <span class="tag" id="plan-tag">—</span>
   <div class="tabs" id="tabs"></div>
@@ -133,7 +153,12 @@
   <span class="tag" id="live">○</span>
 </header>
 
-<div class="board" id="board"><div class="empty">loading…</div></div>
+<div class="main">
+  <aside class="sidebar" id="sidebar"></aside>
+  <div class="content">
+    <div class="board" id="board"><div class="empty">loading…</div></div>
+  </div>
+</div>
 
 <div class="backdrop" id="backdrop" onclick="closeDrawer()"></div>
 <div id="drawer">
@@ -150,6 +175,10 @@ let SNAP = null;
 let TAB = "inflight";       // backlog | inflight | done
 const params = new URLSearchParams(location.search);
 if (params.get("tab")) TAB = params.get("tab");
+// BOARD selects which board (of many in the db) to view; empty => server default.
+let BOARD = params.get("board") || "";
+// boardQ appends the selected board to an API URL so every fetch is board-scoped.
+function boardQ(path){ return BOARD ? path+(path.includes("?")?"&":"?")+"board="+encodeURIComponent(BOARD) : path; }
 
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 function itemById(id){ return (SNAP.items||[]).find(i=>i.id===id); }
@@ -269,7 +298,7 @@ async function openDrawer(id){
   $("#backdrop").classList.add("open"); $("#drawer").classList.add("open");
   $("#drawer-body").innerHTML = `<div class="empty">loading…</div>`;
   try {
-    const d = await (await fetch("/api/item/"+id)).json();
+    const d = await (await fetch(boardQ("/api/item/"+id))).json();
     renderDrawer(d);
   } catch(e){ $("#drawer-body").innerHTML = `<div class="empty">error: ${e}</div>`; }
 }
@@ -335,21 +364,73 @@ document.addEventListener("keydown",e=>{ if(e.key==="Escape") closeDrawer(); });
 // SSE frame), then keep live over the stream.
 async function initialLoad(){
   try{
-    const snap = await (await fetch("/api/board")).json();
+    const snap = await (await fetch(boardQ("/api/board"))).json();
     if (SNAP===null){ SNAP=snap; render(); if (params.get("open")) openDrawer(resolveOpen(params.get("open"))); }
   }catch(e){}
 }
+let ES = null;
 function connect(){
-  const es = new EventSource("/api/stream");
-  es.addEventListener("board",(ev)=>{
+  if (ES) ES.close();
+  ES = new EventSource(boardQ("/api/stream"));
+  ES.addEventListener("board",(ev)=>{
     try{
       const first = SNAP===null;
       SNAP=JSON.parse(ev.data); $("#live").textContent="● live"; render();
+      loadBoards(); // keep sidebar counts (and any newly-started board) fresh
       if (first && params.get("open")) openDrawer(resolveOpen(params.get("open")));
     }catch(e){}
   });
-  es.onerror=()=>{ $("#live").textContent="○ reconnecting"; };
+  ES.onerror=()=>{ $("#live").textContent="○ reconnecting"; };
 }
+
+// ---- boards sidebar: a persistent list of every board hosted in this db ----
+let BOARDS = [];              // last-fetched board summaries
+let DEFAULT_BOARD = "";       // the server's default board id
+function currentBoard(){ return BOARD || DEFAULT_BOARD || (BOARDS[0] && BOARDS[0].id) || ""; }
+
+async function loadBoards(){
+  try{
+    const res = await (await fetch("/api/boards")).json();
+    BOARDS = res.boards || [];
+    DEFAULT_BOARD = res.default || "";
+    renderSidebar();
+  }catch(e){}
+}
+
+function renderSidebar(){
+  const el = $("#sidebar");
+  const cur = currentBoard();
+  let h = `<div class="sb-head">Boards<span class="count">${BOARDS.length}</span></div>`;
+  h += BOARDS.map(b=>{
+    const active = b.id===cur;
+    return `<div class="sb-item ${active?'active':''}" onclick="switchBoard('${esc(b.id)}')" title="${esc(b.name)}">
+      <div class="sb-name">${active?'<span class="sb-dot"></span> ':''}${esc(b.name)}</div>
+      <div class="sb-meta"><span>${esc(b.profile)}</span><span>·</span><span>${b.items} item${b.items===1?'':'s'}</span></div>
+    </div>`;
+  }).join("") || `<div class="empty" style="padding:12px;font-size:12px">no boards yet</div>`;
+  el.innerHTML = h;
+}
+
+function switchBoard(id){
+  if (id===currentBoard()) return;
+  BOARD = id;
+  const u = new URL(location); u.searchParams.set("board", BOARD); history.replaceState({},"",u);
+  SNAP = null; $("#board").innerHTML = `<div class="empty">loading…</div>`;
+  renderSidebar();
+  initialLoad(); connect();
+}
+
+// Collapse/expand the sidebar; persist the choice for the session.
+(function(){
+  const sb = $("#sidebar");
+  if (localStorage.getItem("kb-sidebar")==="collapsed") sb.classList.add("collapsed");
+  $("#sb-toggle").onclick = ()=>{
+    sb.classList.toggle("collapsed");
+    localStorage.setItem("kb-sidebar", sb.classList.contains("collapsed")?"collapsed":"open");
+  };
+})();
+
+loadBoards();
 initialLoad();
 // resolveOpen accepts an item id or an ext_key (e.g. docket:74) to auto-open.
 function resolveOpen(key){

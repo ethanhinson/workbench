@@ -72,18 +72,92 @@ func Import(docsDir string) ([]Change, error) {
 	return changes, nil
 }
 
+// ADR is the subset of a docket ADR (architecture decision record) we surface on
+// the board as a reference card. ADRs live under docs/adrs as frontmatter markdown
+// and link back to the change that introduced them.
+type ADR struct {
+	ID       int
+	Slug     string
+	Title    string
+	Status   string // Accepted | Superseded | Reversed | ...
+	Date     string
+	Change   int   // the change this decision came out of (0 = none)
+	RelatesTo []int
+	Path     string
+}
+
+// ImportADRs reads all ADR manifests under <docsDir>/adrs. Returns them sorted by
+// id. A missing adrs dir is not an error (returns nil).
+func ImportADRs(docsDir string) ([]ADR, error) {
+	dir := filepath.Join(docsDir, "adrs")
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var adrs []ADR
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		a, ok, err := parseADR(filepath.Join(dir, e.Name()))
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			adrs = append(adrs, a)
+		}
+	}
+	sort.Slice(adrs, func(i, j int) bool { return adrs[i].ID < adrs[j].ID })
+	return adrs, nil
+}
+
+func parseADR(path string) (ADR, bool, error) {
+	fields, ok, err := frontmatter(path)
+	if err != nil || !ok {
+		return ADR{}, false, err
+	}
+	a := ADR{
+		Slug:      fields["slug"],
+		Title:     unquote(fields["title"]),
+		Status:    fields["status"],
+		Date:      fields["date"],
+		RelatesTo: parseIntList(fields["relates_to"]),
+		Path:      path,
+	}
+	a.ID, _ = strconv.Atoi(fields["id"])
+	a.Change, _ = strconv.Atoi(fields["change"])
+	if a.ID == 0 && a.Title == "" {
+		return ADR{}, false, nil
+	}
+	return a, true, nil
+}
+
+// unquote strips surrounding double quotes from a YAML scalar.
+func unquote(s string) string {
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		return s[1 : len(s)-1]
+	}
+	return s
+}
+
 // parseChange extracts the frontmatter block (between the first two --- lines).
-func parseChange(path string) (Change, bool, error) {
+// frontmatter reads the YAML-ish frontmatter block (between the first two ---
+// lines) of a markdown file into a flat key->value map. ok is false when the file
+// doesn't open with a --- fence (not a frontmatter doc).
+func frontmatter(path string) (map[string]string, bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return Change{}, false, err
+		return nil, false, err
 	}
 	defer f.Close()
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	if !sc.Scan() || strings.TrimSpace(sc.Text()) != "---" {
-		return Change{}, false, nil // not a frontmatter file
+		return nil, false, nil // not a frontmatter file
 	}
 	fields := map[string]string{}
 	for sc.Scan() {
@@ -96,6 +170,14 @@ func parseChange(path string) (Change, bool, error) {
 			continue
 		}
 		fields[strings.TrimSpace(k)] = strings.TrimSpace(v)
+	}
+	return fields, true, nil
+}
+
+func parseChange(path string) (Change, bool, error) {
+	fields, ok, err := frontmatter(path)
+	if err != nil || !ok {
+		return Change{}, false, err
 	}
 
 	c := Change{

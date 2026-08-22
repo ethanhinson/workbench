@@ -9,43 +9,55 @@ import (
 	"strings"
 
 	"github.com/ethanhinson/kanban-mcp/internal/board"
-	"github.com/ethanhinson/kanban-mcp/internal/docket"
+	"github.com/ethanhinson/kanban-mcp/internal/source"
 	"github.com/ethanhinson/kanban-mcp/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// Server binds the store and the calling agent's identity to the MCP tools.
+// Server binds the store and the calling agent's identity to the MCP tools. It is
+// NOT pinned to one board: a database hosts many boards (plans), and every item
+// tool names its board_id explicitly. The agent creates/selects a board at
+// runtime with board_start. defaultBoardID is the board seeded at construction
+// (used to wire the viz layer and as a back-compat single-board default).
 type Server struct {
-	st      *store.Store
-	plan    *board.Plan
-	agentID string // this server instance's owning agent; used for lanes + event attribution
+	st             *store.Store
+	agentID        string // this server instance's owning agent; event attribution + default lane
+	defaultProfile string // profile used when board_start omits one
+	defaultBoardID string // board seeded at New() time; what PlanID() reports
 }
 
-// PlanID returns the id of the plan this server serves (used to wire the viz layer).
-func (s *Server) PlanID() string { return s.plan.ID }
+// PlanID returns the id of the board this server seeded at construction, or ""
+// when nothing was seeded (no planName given). Used to wire the viz default board;
+// other boards created via board_start are addressed by their own ids.
+func (s *Server) PlanID() string { return s.defaultBoardID }
 
-// New builds an MCP server exposing the plan at the given db. agentID identifies
-// the agent driving this instance. profileKey selects the methodology (sdd|scrum|
-// kanban|...) on first init; it is ignored if the plan already exists.
+// New builds an MCP server over the given db. agentID identifies the agent driving
+// this instance. profileKey is the default methodology (sdd|scrum|kanban|...) used
+// for any board_start that omits a profile.
+//
+// planName controls the connect-time seed: pass a name to seed that one board
+// (single-board / back-compat use, reported via PlanID()), or pass "" to seed
+// NOTHING — the runtime-board model, where the agent creates boards on demand with
+// board_start and no empty default board is left lying around.
 func New(ctx context.Context, st *store.Store, planName, agentID, profileKey string) (*mcp.Server, *Server, error) {
-	plan, err := st.EnsurePlan(ctx, planName, "", profileKey)
-	if err != nil {
-		return nil, nil, err
-	}
 	if agentID == "" {
 		agentID = "agent"
 	}
-	// Only auto-create a per-agent lane when the active profile's lane dimension
-	// is "agent" — under epic/class-of-service profiles the agent isn't the lane.
-	if plan.LaneDimension == string(board.LaneByAgent) {
-		if _, err := st.EnsureLane(ctx, plan.ID, board.Lane{
-			Key: agentID, Name: agentID, AgentID: agentID,
-		}); err != nil {
+	if profileKey == "" {
+		profileKey = "sdd"
+	}
+
+	s := &Server{st: st, agentID: agentID, defaultProfile: profileKey}
+	if planName != "" {
+		plan, err := st.CreatePlan(ctx, planName, "", profileKey)
+		if err != nil {
+			return nil, nil, err
+		}
+		s.defaultBoardID = plan.ID
+		if err := s.ensureAgentLane(ctx, plan); err != nil {
 			return nil, nil, err
 		}
 	}
-
-	s := &Server{st: st, plan: plan, agentID: agentID}
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "kanban-mcp",
 		Version: "0.1.0",
@@ -54,19 +66,71 @@ func New(ctx context.Context, st *store.Store, planName, agentID, profileKey str
 	return srv, s, nil
 }
 
+// ensureAgentLane auto-creates a per-agent lane, but only when the board's profile
+// makes the agent the lane dimension — under epic/class-of-service profiles the
+// agent isn't the lane.
+func (s *Server) ensureAgentLane(ctx context.Context, plan *board.Plan) error {
+	if plan.LaneDimension != string(board.LaneByAgent) {
+		return nil
+	}
+	_, err := s.st.EnsureLane(ctx, plan.ID, board.Lane{Key: s.agentID, Name: s.agentID, AgentID: s.agentID})
+	return err
+}
+
+// resolveBoard validates a board_id and returns the plan. A clear error tells the
+// agent to call board_start when the id is empty or unknown — there is no hidden
+// "active board", so every item tool must name one.
+func (s *Server) resolveBoard(ctx context.Context, boardID string) (*board.Plan, error) {
+	if boardID == "" {
+		return nil, fmt.Errorf("board_id is required — call board_start first to create or select a board")
+	}
+	plan, err := s.st.LoadPlan(ctx, boardID)
+	if err != nil {
+		return nil, fmt.Errorf("unknown board_id %q — call board_start (or board_list to see boards)", boardID)
+	}
+	return plan, nil
+}
+
 func (s *Server) register(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{
+		Name: "board_start",
+		Description: "Start a board: create a named board (or select it if it already exists) and get " +
+			"back its board_id. This is the entry point — call it first, then pass the returned board_id to " +
+			"every other tool. Optionally pick a methodology profile (sdd|scrum|kanban); defaults to the " +
+			"server default. Idempotent by name, so re-starting the same name re-selects the same board.",
+	}, s.boardStart)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "board_list",
+		Description: "List the boards in this database (id, name, profile, item count) so you can pick a " +
+			"board_id to work against or resume an earlier one.",
+	}, s.boardList)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "board_delete",
+		Description: "Delete a board (board_id) and everything on it — items, links, labels, comments. " +
+			"Irreversible. Use to clean up a throwaway or finished session board.",
+	}, s.boardDelete)
+
+	mcp.AddTool(srv, &mcp.Tool{
 		Name: "board_view",
-		Description: "Render the whole kanban board as columns x swim lanes: the single pane of glass. " +
-			"Use to see current state before planning or moving work.",
+		Description: "Render one board (identified by board_id) as columns x swim lanes: the single pane of " +
+			"glass. Use to see current state before planning or moving work.",
 	}, s.boardView)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "item_create",
-		Description: "Create a work item (epic|story|task|bug|spike). Epics contain stories; stories " +
-			"contain tasks (set parent_id to nest). New items default to the 'backlog' column and the " +
-			"calling agent's swim lane.",
+		Description: "Create a work item on a board (board_id required): epic|story|task|bug|spike. Epics " +
+			"contain stories; stories contain tasks (set parent_id to nest). New items default to the " +
+			"'backlog' column and the calling agent's swim lane.",
 	}, s.itemCreate)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "item_link",
+		Description: "Link two items on the same board with a first-class dependency: kind is " +
+			"depends_on|related|discovered_from. Direction: from_id depends_on/relates_to/was_discovered_from " +
+			"to_id. This is how the board expresses relationships — flat, not nested.",
+	}, s.itemLink)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "item_move",
@@ -113,16 +177,81 @@ func (s *Server) register(srv *mcp.Server) {
 	}, s.boardExport)
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "docket_sync",
-		Description: "Import a docket backlog into this board (idempotent). Reads change manifests from the " +
-			"docket docs directory (e.g. <repo>/.docket/docs) and maps each change to a card keyed by docket id; " +
-			"re-running updates in place. Works with any harness because docket stores work as markdown on a branch.",
-	}, s.docketSync)
+		Name: "source_sync",
+		Description: "Sync an external source (currently 'docket') into a board (board_id required), " +
+			"idempotently. Reads read-only backlog/done/ADR data from the source and projects it onto the " +
+			"board as cards keyed by external id; re-running updates in place. The board process owns your " +
+			"live in-flight work; sources are decoupled inputs. For docket, pass docs_dir " +
+			"(e.g. <repo>/.docket/docs). Works with any harness because docket stores work as markdown on a branch.",
+	}, s.sourceSync)
 }
 
 // ---- tool I/O types ----
 
+type boardStartIn struct {
+	Name    string `json:"name" jsonschema:"human name for the board, e.g. this session's deliverable"`
+	Profile string `json:"profile,omitempty" jsonschema:"methodology profile sdd|scrum|kanban; defaults to the server default"`
+}
+
+type boardStartOut struct {
+	BoardID string `json:"board_id"`
+	Name    string `json:"name"`
+	Profile string `json:"profile"`
+	Message string `json:"message"`
+}
+
+func (s *Server) boardStart(ctx context.Context, _ *mcp.CallToolRequest, in boardStartIn) (*mcp.CallToolResult, boardStartOut, error) {
+	if in.Name == "" {
+		return nil, boardStartOut{}, fmt.Errorf("name is required")
+	}
+	profile := in.Profile
+	if profile == "" {
+		profile = s.defaultProfile
+	}
+	plan, err := s.st.CreatePlan(ctx, in.Name, "", profile)
+	if err != nil {
+		return nil, boardStartOut{}, err
+	}
+	if err := s.ensureAgentLane(ctx, plan); err != nil {
+		return nil, boardStartOut{}, err
+	}
+	return nil, boardStartOut{
+		BoardID: plan.ID, Name: plan.Name, Profile: plan.ProfileKey,
+		Message: fmt.Sprintf("board %q ready — pass board_id=%s to the other tools", plan.Name, plan.ID),
+	}, nil
+}
+
+type boardListIn struct{}
+
+type boardListOut struct {
+	Boards []store.PlanSummary `json:"boards"`
+}
+
+func (s *Server) boardList(ctx context.Context, _ *mcp.CallToolRequest, _ boardListIn) (*mcp.CallToolResult, boardListOut, error) {
+	boards, err := s.st.ListPlans(ctx)
+	if err != nil {
+		return nil, boardListOut{}, err
+	}
+	return nil, boardListOut{Boards: boards}, nil
+}
+
+type boardDeleteIn struct {
+	BoardID string `json:"board_id" jsonschema:"the board to delete (from board_list)"`
+}
+
+func (s *Server) boardDelete(ctx context.Context, _ *mcp.CallToolRequest, in boardDeleteIn) (*mcp.CallToolResult, itemOut, error) {
+	plan, err := s.resolveBoard(ctx, in.BoardID)
+	if err != nil {
+		return nil, itemOut{}, err
+	}
+	if err := s.st.DeletePlan(ctx, plan.ID); err != nil {
+		return nil, itemOut{}, err
+	}
+	return nil, itemOut{ID: plan.ID, Message: fmt.Sprintf("deleted board %q", plan.Name)}, nil
+}
+
 type boardViewIn struct {
+	BoardID string `json:"board_id" jsonschema:"the board to view (from board_start / board_list)"`
 	LaneKey string `json:"lane_key,omitempty" jsonschema:"restrict the view to a single swim lane"`
 }
 
@@ -145,20 +274,24 @@ type cell struct {
 }
 
 func (s *Server) boardView(ctx context.Context, _ *mcp.CallToolRequest, in boardViewIn) (*mcp.CallToolResult, boardViewOut, error) {
-	cols, err := s.st.Columns(ctx, s.plan.ID)
+	plan, err := s.resolveBoard(ctx, in.BoardID)
 	if err != nil {
 		return nil, boardViewOut{}, err
 	}
-	lanes, err := s.st.Lanes(ctx, s.plan.ID)
+	cols, err := s.st.Columns(ctx, plan.ID)
 	if err != nil {
 		return nil, boardViewOut{}, err
 	}
-	items, err := s.st.ListItems(ctx, s.plan.ID, store.Filter{LaneKey: in.LaneKey})
+	lanes, err := s.st.Lanes(ctx, plan.ID)
+	if err != nil {
+		return nil, boardViewOut{}, err
+	}
+	items, err := s.st.ListItems(ctx, plan.ID, store.Filter{LaneKey: in.LaneKey})
 	if err != nil {
 		return nil, boardViewOut{}, err
 	}
 
-	out := boardViewOut{Plan: s.plan.Name, Cells: map[string][]cell{}}
+	out := boardViewOut{Plan: plan.Name, Cells: map[string][]cell{}}
 	for _, c := range cols {
 		out.Columns = append(out.Columns, c.Key)
 	}
@@ -186,6 +319,7 @@ func (s *Server) boardView(ctx context.Context, _ *mcp.CallToolRequest, in board
 }
 
 type itemCreateIn struct {
+	BoardID  string   `json:"board_id" jsonschema:"the board to create the item on (from board_start)"`
 	Kind     string   `json:"kind" jsonschema:"one of epic|story|task|bug|spike"`
 	Title    string   `json:"title"`
 	Body     string   `json:"body,omitempty"`
@@ -203,16 +337,20 @@ type itemOut struct {
 }
 
 func (s *Server) itemCreate(ctx context.Context, _ *mcp.CallToolRequest, in itemCreateIn) (*mcp.CallToolResult, itemOut, error) {
+	plan, err := s.resolveBoard(ctx, in.BoardID)
+	if err != nil {
+		return nil, itemOut{}, err
+	}
 	labels, err := parseLabels(in.Labels)
 	if err != nil {
 		return nil, itemOut{}, err
 	}
 	lane := in.Lane
 	if lane == "" {
-		lane = s.defaultLane()
+		lane = s.defaultLane(plan)
 	}
 	it := &board.Item{
-		PlanID:    s.plan.ID,
+		PlanID:    plan.ID,
 		ParentID:  in.ParentID,
 		Kind:      board.Kind(in.Kind),
 		Title:     in.Title,
@@ -228,6 +366,38 @@ func (s *Server) itemCreate(ctx context.Context, _ *mcp.CallToolRequest, in item
 		return nil, itemOut{}, err
 	}
 	return nil, itemOut{ID: created.ID, Message: fmt.Sprintf("created %s %q", created.Kind, created.Title)}, nil
+}
+
+type itemLinkIn struct {
+	BoardID string `json:"board_id" jsonschema:"the board both items belong to"`
+	FromID  string `json:"from_id" jsonschema:"the dependent/relating item"`
+	ToID    string `json:"to_id" jsonschema:"the depended-on/related item"`
+	Kind    string `json:"kind" jsonschema:"depends_on|related|discovered_from"`
+}
+
+func (s *Server) itemLink(ctx context.Context, _ *mcp.CallToolRequest, in itemLinkIn) (*mcp.CallToolResult, itemOut, error) {
+	plan, err := s.resolveBoard(ctx, in.BoardID)
+	if err != nil {
+		return nil, itemOut{}, err
+	}
+	switch in.Kind {
+	case "depends_on", "related", "discovered_from":
+	default:
+		return nil, itemOut{}, fmt.Errorf("kind %q must be depends_on|related|discovered_from", in.Kind)
+	}
+	for _, id := range []string{in.FromID, in.ToID} {
+		pid, ok := s.st.ItemPlanID(ctx, id)
+		if !ok {
+			return nil, itemOut{}, fmt.Errorf("item %q not found", id)
+		}
+		if pid != plan.ID {
+			return nil, itemOut{}, fmt.Errorf("item %q is not on board %q", id, plan.ID)
+		}
+	}
+	if err := s.st.AddLink(ctx, plan.ID, in.FromID, in.ToID, in.Kind); err != nil {
+		return nil, itemOut{}, err
+	}
+	return nil, itemOut{ID: in.FromID, Message: fmt.Sprintf("%s -> %s (%s)", in.FromID, in.ToID, in.Kind)}, nil
 }
 
 type itemMoveIn struct {
@@ -302,23 +472,29 @@ func (s *Server) itemComment(ctx context.Context, _ *mcp.CallToolRequest, in ite
 }
 
 type laneConfigureIn struct {
+	BoardID string `json:"board_id" jsonschema:"the board to add/ensure the lane on"`
 	Key     string `json:"key" jsonschema:"stable lane key, e.g. an agent id"`
 	Name    string `json:"name,omitempty"`
 	AgentID string `json:"agent_id,omitempty"`
 }
 
 func (s *Server) laneConfigure(ctx context.Context, _ *mcp.CallToolRequest, in laneConfigureIn) (*mcp.CallToolResult, itemOut, error) {
+	plan, err := s.resolveBoard(ctx, in.BoardID)
+	if err != nil {
+		return nil, itemOut{}, err
+	}
 	name := in.Name
 	if name == "" {
 		name = in.Key
 	}
-	if _, err := s.st.EnsureLane(ctx, s.plan.ID, board.Lane{Key: in.Key, Name: name, AgentID: in.AgentID}); err != nil {
+	if _, err := s.st.EnsureLane(ctx, plan.ID, board.Lane{Key: in.Key, Name: name, AgentID: in.AgentID}); err != nil {
 		return nil, itemOut{}, err
 	}
 	return nil, itemOut{ID: in.Key, Message: "lane ready"}, nil
 }
 
 type itemsListIn struct {
+	BoardID  string `json:"board_id" jsonschema:"the board to list items from"`
 	Column   string `json:"column,omitempty"`
 	Lane     string `json:"lane,omitempty"`
 	ParentID string `json:"parent_id,omitempty"`
@@ -330,7 +506,11 @@ type itemsListOut struct {
 }
 
 func (s *Server) itemsList(ctx context.Context, _ *mcp.CallToolRequest, in itemsListIn) (*mcp.CallToolResult, itemsListOut, error) {
-	items, err := s.st.ListItems(ctx, s.plan.ID, store.Filter{
+	plan, err := s.resolveBoard(ctx, in.BoardID)
+	if err != nil {
+		return nil, itemsListOut{}, err
+	}
+	items, err := s.st.ListItems(ctx, plan.ID, store.Filter{
 		ColumnKey: in.Column, LaneKey: in.Lane, ParentID: in.ParentID, Kind: in.Kind,
 	})
 	if err != nil {
@@ -339,42 +519,63 @@ func (s *Server) itemsList(ctx context.Context, _ *mcp.CallToolRequest, in items
 	return nil, itemsListOut{Items: items}, nil
 }
 
-type boardExportIn struct{}
+type boardExportIn struct {
+	BoardID string `json:"board_id" jsonschema:"the board to export"`
+}
 
-func (s *Server) boardExport(ctx context.Context, _ *mcp.CallToolRequest, _ boardExportIn) (*mcp.CallToolResult, board.Snapshot, error) {
-	snap, err := s.st.Snapshot(ctx, s.plan.ID)
+func (s *Server) boardExport(ctx context.Context, _ *mcp.CallToolRequest, in boardExportIn) (*mcp.CallToolResult, board.Snapshot, error) {
+	plan, err := s.resolveBoard(ctx, in.BoardID)
+	if err != nil {
+		return nil, board.Snapshot{}, err
+	}
+	snap, err := s.st.Snapshot(ctx, plan.ID)
 	if err != nil {
 		return nil, board.Snapshot{}, err
 	}
 	return nil, snap, nil
 }
 
-type docketSyncIn struct {
-	DocsDir string `json:"docs_dir" jsonschema:"path to the docket docs directory, e.g. /path/to/repo/.docket/docs"`
+type sourceSyncIn struct {
+	BoardID string `json:"board_id" jsonschema:"the board to project the source onto"`
+	Source  string `json:"source,omitempty" jsonschema:"external source kind; defaults to docket"`
+	DocsDir string `json:"docs_dir" jsonschema:"for docket: path to the docs dir, e.g. /path/to/repo/.docket/docs"`
 }
 
-type docketSyncOut struct {
-	Changes int    `json:"changes"`
-	Lanes   int    `json:"lanes"`
+type sourceSyncOut struct {
+	Source  string `json:"source"`
+	Items   int    `json:"items"`
+	Links   int    `json:"links"`
 	Message string `json:"message"`
 }
 
-func (s *Server) docketSync(ctx context.Context, _ *mcp.CallToolRequest, in docketSyncIn) (*mcp.CallToolResult, docketSyncOut, error) {
-	res, err := docket.NewSyncer(s.st, s.plan.ID).Sync(ctx, in.DocsDir)
+func (s *Server) sourceSync(ctx context.Context, _ *mcp.CallToolRequest, in sourceSyncIn) (*mcp.CallToolResult, sourceSyncOut, error) {
+	plan, err := s.resolveBoard(ctx, in.BoardID)
 	if err != nil {
-		return nil, docketSyncOut{}, err
+		return nil, sourceSyncOut{}, err
 	}
-	return nil, docketSyncOut{
-		Changes: res.Changes, Lanes: res.Lanes,
-		Message: fmt.Sprintf("synced %d docket changes into %d type lanes", res.Changes, res.Lanes),
+	kind := in.Source
+	if kind == "" {
+		kind = "docket"
+	}
+	provider, err := source.NewProvider(kind, source.Config{DocsDir: in.DocsDir})
+	if err != nil {
+		return nil, sourceSyncOut{}, err
+	}
+	res, err := source.Sync(ctx, s.st, plan.ID, provider)
+	if err != nil {
+		return nil, sourceSyncOut{}, err
+	}
+	return nil, sourceSyncOut{
+		Source: kind, Items: res.Items, Links: res.Links,
+		Message: fmt.Sprintf("synced %d %s items (%d links) onto board %q", res.Items, kind, res.Links, plan.Name),
 	}, nil
 }
 
 // defaultLane picks the lane an item lands in when none is given, based on the
-// profile's lane dimension: the agent's own lane under an agent profile, else the
-// shared lane (epic/class-of-service profiles expect an explicit lane).
-func (s *Server) defaultLane() string {
-	if s.plan.LaneDimension == string(board.LaneByAgent) {
+// board profile's lane dimension: the agent's own lane under an agent profile,
+// else the shared lane (epic/class-of-service profiles expect an explicit lane).
+func (s *Server) defaultLane(plan *board.Plan) string {
+	if plan.LaneDimension == string(board.LaneByAgent) {
 		return s.agentID
 	}
 	return "shared"

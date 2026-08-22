@@ -1,13 +1,11 @@
 package docket
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/ethanhinson/kanban-mcp/internal/board"
-	"github.com/ethanhinson/kanban-mcp/internal/store"
 )
 
 const manifestProposed = `---
@@ -110,67 +108,49 @@ func TestImportMapping(t *testing.T) {
 		t.Errorf("#63 spec: got %q want approved", got)
 	}
 
-	// #40 proposed + branch set => in_progress; fix type => bug kind, fix lane.
+	// #40 proposed + branch set => in_progress; fix type (=> bug kind in the source
+	// mapping), fix lane.
 	if got := byID[40].ColumnFor(); got != "in_progress" {
 		t.Errorf("#40 column: got %q want in_progress", got)
 	}
-	if got := kindFor(byID[40]); got != board.KindBug {
-		t.Errorf("#40 kind: got %q want bug", got)
+	if got := byID[40].Type; got != "fix" {
+		t.Errorf("#40 type: got %q want fix", got)
 	}
 }
 
-func TestSyncIdempotentAndNested(t *testing.T) {
-	root := writeDocket(t)
-	st, err := store.Open(filepath.Join(t.TempDir(), "s.db"))
+func TestImportADRs(t *testing.T) {
+	root := t.TempDir()
+	adrDir := filepath.Join(root, "adrs")
+	if err := os.MkdirAll(adrDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const adr = `---
+id: 7
+slug: scheduler-single-admission-authority
+title: "Scheduler is the single admission authority"
+status: Accepted
+date: 2026-08-05
+change: 8
+relates_to: [3]
+---
+## Context
+body
+`
+	if err := os.WriteFile(filepath.Join(adrDir, "0007-x.md"), []byte(adr), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	adrs, err := ImportADRs(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
-	ctx := context.Background()
-	plan, _ := st.EnsurePlan(ctx, "P", "", "docket")
-
-	syncer := NewSyncer(st, plan.ID)
-	r1, err := syncer.Sync(ctx, root)
-	if err != nil {
-		t.Fatal(err)
+	if len(adrs) != 1 {
+		t.Fatalf("want 1 ADR, got %d", len(adrs))
 	}
-	if r1.Changes != 3 {
-		t.Fatalf("first sync changes: %d", r1.Changes)
+	a := adrs[0]
+	if a.ID != 7 || a.Change != 8 || a.Status != "Accepted" {
+		t.Errorf("ADR fields: %+v", a)
 	}
-	items1, _ := st.ListItems(ctx, plan.ID, store.Filter{})
-	if len(items1) != 3 {
-		t.Fatalf("want 3 items after sync, got %d", len(items1))
-	}
-
-	// Re-sync must not duplicate (idempotent by ext key).
-	if _, err := syncer.Sync(ctx, root); err != nil {
-		t.Fatal(err)
-	}
-	items2, _ := st.ListItems(ctx, plan.ID, store.Filter{})
-	if len(items2) != 3 {
-		t.Fatalf("re-sync duplicated items: got %d want 3", len(items2))
-	}
-
-	// #74 depends_on [63] and discovered_from [63] => a link (not nesting).
-	from, ok := st.ItemIDByExtKey(ctx, plan.ID, "docket:74")
-	if !ok {
-		t.Fatal("missing docket:74 item")
-	}
-	to, ok := st.ItemIDByExtKey(ctx, plan.ID, "docket:63")
-	if !ok {
-		t.Fatal("missing docket:63 item")
-	}
-	links, err := st.Links(ctx, plan.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var hasDep bool
-	for _, l := range links {
-		if l.From == from && l.To == to && l.Kind == "depends_on" {
-			hasDep = true
-		}
-	}
-	if !hasDep {
-		t.Fatalf("#74 should have a depends_on link to #63; links=%+v", links)
+	if a.Title != "Scheduler is the single admission authority" {
+		t.Errorf("ADR title not unquoted: %q", a.Title)
 	}
 }

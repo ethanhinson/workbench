@@ -20,15 +20,37 @@ import (
 //go:embed static/*
 var staticFS embed.FS
 
-// Server serves the board API + reference SPA for a single plan.
+// Server serves the board API + reference SPA over one database of many boards.
+// A request selects its board with ?board=<id>; defaultPlan is the fallback when
+// the query is absent (the board seeded at startup), so single-board setups need
+// no query at all.
 type Server struct {
-	st       *store.Store
-	planID   string
-	repoRoot string // base dir for resolving spec/plan ref paths (docket repo); may be ""
+	st          *store.Store
+	defaultPlan string
+	repoRoot    string // base dir for resolving spec/plan ref paths (docket repo); may be ""
 }
 
-func NewServer(st *store.Store, planID string) *Server {
-	return &Server{st: st, planID: planID}
+func NewServer(st *store.Store, defaultPlanID string) *Server {
+	return &Server{st: st, defaultPlan: defaultPlanID}
+}
+
+// board resolves the board for a request: the ?board=<id> query if present and
+// valid, else the default board. When no default was configured (the server was
+// started without seeding a board), it falls back to the first board in the db so
+// the UI still renders something. It never fails — an unknown/blank id falls back.
+func (s *Server) board(r *http.Request) string {
+	if id := r.URL.Query().Get("board"); id != "" {
+		if _, err := s.st.LoadPlan(r.Context(), id); err == nil {
+			return id
+		}
+	}
+	if s.defaultPlan != "" {
+		return s.defaultPlan
+	}
+	if boards, err := s.st.ListPlans(r.Context()); err == nil && len(boards) > 0 {
+		return boards[0].ID
+	}
+	return ""
 }
 
 // WithRepoRoot sets the base directory used to resolve an item's spec_ref/plan
@@ -55,6 +77,7 @@ func (s *Server) Handler() http.Handler {
 		fileSrv.ServeHTTP(w, r)
 	}))
 
+	mux.HandleFunc("/api/boards", s.handleBoards)
 	mux.HandleFunc("/api/board", s.handleBoard)
 	mux.HandleFunc("/api/stream", s.handleStream)
 	mux.HandleFunc("/api/item/", s.handleItem)
@@ -65,8 +88,19 @@ func (s *Server) Handler() http.Handler {
 	return withCORS(mux)
 }
 
+// handleBoards lists the boards in the db so the SPA picker can offer a choice
+// and mark which one is the default.
+func (s *Server) handleBoards(w http.ResponseWriter, r *http.Request) {
+	boards, err := s.st.ListPlans(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"boards": boards, "default": s.defaultPlan})
+}
+
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
-	snap, err := s.st.Snapshot(r.Context(), s.planID)
+	snap, err := s.st.Snapshot(r.Context(), s.board(r))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -82,7 +116,7 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing item id", http.StatusBadRequest)
 		return
 	}
-	detail, err := s.st.ItemDetail(r.Context(), s.planID, id, s.readRef)
+	detail, err := s.st.ItemDetail(r.Context(), s.board(r), id, s.readRef)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -129,8 +163,9 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	changes, unsub := s.st.Broker().Subscribe()
 	defer unsub()
 
+	planID := s.board(r) // fixed for this connection; the client reconnects to switch boards
 	send := func() bool {
-		snap, err := s.st.Snapshot(r.Context(), s.planID)
+		snap, err := s.st.Snapshot(r.Context(), planID)
 		if err != nil {
 			return false
 		}

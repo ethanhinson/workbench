@@ -1,11 +1,14 @@
--- kanban-mcp schema. One SQLite file == one Plan (the top-level shared board).
+-- kanban-mcp schema. One SQLite file hosts MANY boards (plan rows); an agent
+-- creates/selects a board at runtime via board_start. Every table below is keyed
+-- by plan_id, so a database file is a multi-board container.
 -- Nested model: plan > epic > story > task. Boards are views over a plan.
 
 PRAGMA journal_mode = WAL;      -- concurrent agents: readers don't block the writer
 PRAGMA foreign_keys = ON;
 PRAGMA busy_timeout = 5000;     -- wait rather than fail when another agent holds the write lock
 
--- The single top-level plan this database represents.
+-- Boards. Each row is one board (plan) in this database. board_start is
+-- idempotent by name, so name is unique — starting an existing board selects it.
 CREATE TABLE IF NOT EXISTS plan (
     id          TEXT PRIMARY KEY,          -- ulid
     name        TEXT NOT NULL,
@@ -14,7 +17,8 @@ CREATE TABLE IF NOT EXISTS plan (
     lane_dim    TEXT NOT NULL DEFAULT 'agent', -- what a swim lane means under this profile
     policies    TEXT NOT NULL DEFAULT '{}',  -- JSON-encoded board.Policies (the enforcement rules)
     created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
+    updated_at  TEXT NOT NULL,
+    UNIQUE (name)
 );
 
 -- Workflow columns (stages). Seeded with SDD-opinionated defaults, overridable.

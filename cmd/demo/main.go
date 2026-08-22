@@ -15,8 +15,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/ethanhinson/kanban-mcp/internal/docket"
 	"github.com/ethanhinson/kanban-mcp/internal/mcpserver"
+	"github.com/ethanhinson/kanban-mcp/internal/source"
 	"github.com/ethanhinson/kanban-mcp/internal/store"
 	"github.com/ethanhinson/kanban-mcp/internal/viz"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -84,11 +84,15 @@ func main() {
 
 	steps := map[string]func(){
 		"import": func() {
-			r, err := docket.NewSyncer(st, planID).Sync(ctx, *docsDir)
+			provider, err := source.NewProvider("docket", source.Config{DocsDir: *docsDir})
 			if err != nil {
 				log.Fatal(err)
 			}
-			log.Printf("→ import           [ok] %d changes, %d lanes", r.Changes, r.Lanes)
+			r, err := source.Sync(ctx, st, planID, provider)
+			if err != nil {
+				log.Fatal(err)
+			}
+			log.Printf("→ import           [ok] %d items, %d links", r.Items, r.Links)
 		},
 		"spec": func() {
 			call("item_set_spec", map[string]any{"item_id": itemID(), "spec_ref": "docs/specs/74-sandbox-health.md", "status": "draft"})

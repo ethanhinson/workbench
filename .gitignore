@@ -3,3 +3,8 @@
 *.db-shm
 *.db-wal
 /tmp/
+/.kanban/
+# local MCP client config (per-machine; the server is registered globally)
+/.mcp.json
+# codeindex tool state (churns; not source)
+/.codeindex/

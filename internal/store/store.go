@@ -60,20 +60,34 @@ func (s *Store) Close() error { return s.db.Close() }
 func now() string    { return time.Now().UTC().Format(time.RFC3339) }
 func newID() string  { return ulid.Make().String() }
 
-// EnsurePlan returns the single plan for this db. If the db is empty it creates
-// the plan from the named methodology profile (built-in preset), seeding that
-// profile's columns, seed lanes, lane dimension, and enforcement policies. The
-// profile is what binds meaning to both board axes; see board.Profile.
-// An unknown profileKey falls back to "sdd".
+// EnsurePlan is the single-board convenience: it returns the first plan in the db
+// (whatever its name), creating one from the named profile if the db is empty. It
+// exists for callers that treat the file as one board. Multi-board callers use
+// CreatePlan / GetPlanByName instead. An unknown profileKey falls back to "sdd".
 func (s *Store) EnsurePlan(ctx context.Context, name, description, profileKey string) (*board.Plan, error) {
 	var p board.Plan
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, name, description, profile, lane_dim, policies, created_at, updated_at FROM plan LIMIT 1`)
+		`SELECT id, name, description, profile, lane_dim, policies, created_at, updated_at FROM plan ORDER BY created_at LIMIT 1`)
 	err := row.Scan(&p.ID, &p.Name, &p.Description, &p.ProfileKey, &p.LaneDimension, &p.PoliciesJSON, &p.CreatedAt, &p.UpdatedAt)
 	if err == nil {
 		return &p, nil // existing plan keeps its profile; profileKey arg is ignored
 	}
 	if err != sql.ErrNoRows {
+		return nil, err
+	}
+	return s.CreatePlan(ctx, name, description, profileKey)
+}
+
+// CreatePlan creates a board (plan) from the named methodology profile, seeding
+// its columns, seed lanes, lane dimension, and enforcement policies — the profile
+// is what binds meaning to both board axes (see board.Profile). It is idempotent
+// by name: starting a board that already exists returns the existing one rather
+// than erroring. An unknown profileKey falls back to "sdd". This is the store
+// primitive behind the agent-facing board_start tool.
+func (s *Store) CreatePlan(ctx context.Context, name, description, profileKey string) (*board.Plan, error) {
+	if existing, err := s.GetPlanByName(ctx, name); err == nil {
+		return existing, nil // idempotent: board_start on an existing name selects it
+	} else if err != sql.ErrNoRows {
 		return nil, err
 	}
 
@@ -93,7 +107,7 @@ func (s *Store) EnsurePlan(ctx context.Context, name, description, profileKey st
 	defer tx.Rollback()
 
 	ts := now()
-	p = board.Plan{
+	p := board.Plan{
 		ID: newID(), Name: name, Description: description,
 		ProfileKey: prof.Key, LaneDimension: string(prof.LaneDimension), PoliciesJSON: string(policiesJSON),
 		CreatedAt: ts, UpdatedAt: ts,
@@ -127,6 +141,85 @@ func (s *Store) EnsurePlan(ctx context.Context, name, description, profileKey st
 		return nil, err
 	}
 	return &p, nil
+}
+
+// GetPlanByName resolves a board by its unique name. Returns sql.ErrNoRows if no
+// board with that name exists (callers distinguish "absent" from a real error).
+func (s *Store) GetPlanByName(ctx context.Context, name string) (*board.Plan, error) {
+	var p board.Plan
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id,name,description,profile,lane_dim,policies,created_at,updated_at FROM plan WHERE name=?`, name).
+		Scan(&p.ID, &p.Name, &p.Description, &p.ProfileKey, &p.LaneDimension, &p.PoliciesJSON, &p.CreatedAt, &p.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// PlanSummary is a lightweight board listing entry (for board_list / a UI picker).
+type PlanSummary struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	ProfileKey string `json:"profile"`
+	Items      int    `json:"items"`
+	CreatedAt  string `json:"created_at"`
+}
+
+// ListPlans returns every board in the db with a cheap item count, newest last.
+func (s *Store) ListPlans(ctx context.Context) ([]PlanSummary, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT p.id, p.name, p.profile, p.created_at, COUNT(i.id)
+		 FROM plan p LEFT JOIN item i ON i.plan_id = p.id
+		 GROUP BY p.id ORDER BY p.created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PlanSummary
+	for rows.Next() {
+		var ps PlanSummary
+		if err := rows.Scan(&ps.ID, &ps.Name, &ps.ProfileKey, &ps.CreatedAt, &ps.Items); err != nil {
+			return nil, err
+		}
+		out = append(out, ps)
+	}
+	return out, rows.Err()
+}
+
+// DeletePlan removes a board and everything under it (items, links, labels,
+// events, lanes, columns) in one transaction. Children are deleted explicitly
+// rather than relying on ON DELETE CASCADE, so it's correct even if foreign-key
+// enforcement is off on the connection. Returns an error if the board is absent.
+func (s *Store) DeletePlan(ctx context.Context, planID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var exists int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM plan WHERE id=?`, planID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 0 {
+		return fmt.Errorf("board %q not found", planID)
+	}
+
+	// Labels hang off items, so clear them first (by the plan's items), then the
+	// rest. Order matters only for label (no plan_id column of its own).
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM label WHERE item_id IN (SELECT id FROM item WHERE plan_id=?)`, planID); err != nil {
+		return err
+	}
+	for _, table := range []string{"event", "link", "item", "lane", "column_def"} {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE plan_id=?`, planID); err != nil {
+			return fmt.Errorf("delete from %s: %w", table, err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM plan WHERE id=?`, planID); err != nil {
+		return fmt.Errorf("delete plan: %w", err)
+	}
+	return s.commit(tx)
 }
 
 // LoadPlan returns the single plan row with all fields populated.
@@ -829,6 +922,17 @@ func (s *Store) itemLabels(ctx context.Context, itemID string) ([]board.Label, e
 		out = append(out, l)
 	}
 	return out, rows.Err()
+}
+
+// ItemPlanID resolves an item to the board (plan) it belongs to. The bool is
+// false if the item doesn't exist — used to validate cross-item operations like
+// linking, where both endpoints must live on the same board.
+func (s *Store) ItemPlanID(ctx context.Context, itemID string) (string, bool) {
+	planID, err := s.itemPlan(ctx, itemID)
+	if err != nil {
+		return "", false
+	}
+	return planID, true
 }
 
 func (s *Store) itemPlan(ctx context.Context, itemID string) (string, error) {

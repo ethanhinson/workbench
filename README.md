@@ -1,28 +1,39 @@
 # kanban-mcp
 
-An MCP server that gives a coding agent a **kanban board** for spec-driven
+An MCP server that gives a coding agent **kanban boards** for spec-driven
 development (SDD / Spec-DD) — a single pane of glass over the work discussed and
 done in a run.
 
-Work nests the way stories and epics do:
+The agent **starts a board** at runtime and drives it live:
 
 ```
-Plan            one shared board  (= one SQLite file)
- └─ Epic        a large slice of the plan (often a spec doc)
-     └─ Story   one deliverable, ~one PR
-         └─ Task a checklist item
+board_start "Auth work"   → board_id            an agent creates/selects a board
+ ├─ item_create story/task/…                     add work to it (board_id)
+ ├─ item_link  from → to  (depends_on|related)   wire dependencies (flat, not nested)
+ └─ item_move  → specifying → specd → …          drive it as the session progresses
 ```
+
+- **Many boards per database.** One SQLite file hosts many boards. `board_start`
+  creates or selects one by name (idempotent), so a session can run several boards
+  in parallel and switch between them in the UI. **Every tool names its `board_id`
+  explicitly — there is no hidden "active board."**
+- **The board owns live in-flight work.** Backlog, done, and ADRs are **decoupled
+  read-only inputs**, projected in from an external source (docket today) via a
+  pluggable `SourceProvider` — see [Sources](#external-sources-decoupled-inputs).
 
 The board is **columns × swim lanes**. Columns are the workflow; lanes are
 configurable and default to **one per agent**, so several agents can share one
-plan while each owns a lane that rolls up into it.
+board while each owns a lane that rolls up into it. Items can still nest
+(`parent_id`: epic → story → task), but relationships are expressed as
+first-class **links**, not containment.
 
 ## Design choices
 
-- **SQLite, one file per plan.** WAL + `busy_timeout` so concurrent agents can
-  read/write. Set with `--db`.
-- **Nested & shared.** A single plan (`--plan`) is shared; each agent connects
-  with its own `--agent` id and gets a swim lane automatically.
+- **SQLite, many boards per file.** WAL + `busy_timeout` so concurrent agents can
+  read/write. Set the file with `--db`; create/select boards with `board_start`.
+- **Runtime boards, explicit ids.** No launch-time plan binding is required —
+  `board_start` returns a `board_id` you pass to every other tool. Each agent
+  connects with its own `--agent` id and gets a swim lane automatically.
 - **SDD-opinionated, overridable columns:**
   `Backlog → Specifying → Spec'd → In Progress → Review → Done`.
   `Blocked` is a flag on an item, not a column — a blocked item keeps its stage.
@@ -88,61 +99,83 @@ uses.
 > A terminal UI (TUI) client is deliberately out of scope for now — the Snapshot +
 > SSE contract makes one easy to add later without server changes.
 
+The UI shows a **board picker** when the db holds more than one board; a request
+selects its board with `?board=<id>` (defaulting to the board seeded at startup).
+
 ```sh
-# browse a board (no agent needed)
-./kanban-mcp --db ./runbook.db --plan "Runbook" --viz-only --http :7777
+# browse boards in a db (no agent needed)
+./kanban-mcp --db ./runbook.db --viz-only --http :7777
 # or serve the UI alongside the MCP stdio server
-./kanban-mcp --db ./runbook.db --plan "Runbook" --agent alice --http :7777
+./kanban-mcp --db ./runbook.db --agent alice --http :7777
 ```
 
-## Importing a docket backlog (works with any harness)
+## External sources (decoupled inputs)
 
-[docket](https://github.com/ethanhinson) tracks work as markdown change manifests on
-the repo's metadata branch. Because that's just markdown-on-a-branch, kanban-mcp can
-read it directly and render it — no docket tooling or specific agent required.
+The board process owns the agent's **live in-flight work**. Everything else —
+backlog, done, ADRs — is a **read-only projection** from an external source of
+truth, behind a pluggable `SourceProvider` seam (`internal/source`). Which source
+refreshes, and when, is decoupled from the running board: an agent, a CLI flag, or
+a cron triggers a sync; the board never owns the source.
+
+**docket** is the first provider. [docket](https://github.com/ethanhinson) tracks
+work as markdown change manifests (and ADRs) on the repo's metadata branch. Because
+that's just markdown-on-a-branch, kanban-mcp reads it directly — no docket tooling
+or specific agent required.
 
 ```sh
-# one-shot import (idempotent; re-run to refresh)
-kanban-mcp --db /tmp/fuse-board.db --plan "Fuse Backlog" \
-  --profile docket --docket-sync ~/dev/fuse/.docket/docs
+# one-shot projection onto the seeded board (idempotent; re-run to refresh)
+kanban-mcp --db /tmp/fuse-board.db --plan "Fuse Backlog" --profile docket \
+  --source docket --docs-dir ~/dev/fuse/.docket/docs
 
 # then browse it
-kanban-mcp --db /tmp/fuse-board.db --plan "Fuse Backlog" --viz-only --http :7777
+kanban-mcp --db /tmp/fuse-board.db --viz-only --http :7777
 ```
 
-Or from an agent: call the **`docket_sync`** MCP tool with `{ "docs_dir": "<repo>/.docket/docs" }`.
+Or from an agent: call **`source_sync`** with
+`{ "board_id": "<id>", "source": "docket", "docs_dir": "<repo>/.docket/docs" }`.
 
 If the metadata branch isn't checked out to a worktree, export it read-only first:
-`git -C <repo> archive docket docs | tar -x -C "$TMP"` and point `--docket-sync` at
+`git -C <repo> archive docket docs | tar -x -C "$TMP"` and point `--docs-dir` at
 `$TMP/docs`. The **`kanban-docket-sync` skill** (`skills/`) automates this resolution.
 
 Mapping: change → card (`docket:<id>`), `status` → column, `type` → swim lane,
 `priority` → `p0..p3`, spec/plan presence → spec status, `blocked_by` → blocked flag,
-`discovered_from`/`depends_on` → nesting. The board is read-only over docket — docket
-stays the source of truth.
+`depends_on`/`discovered_from`/`related` → first-class links. ADRs project as
+reference cards (`adr:<id>`) in an `adr` lane, linked to the change they came from.
+The board is read-only over the source — the source stays the source of truth.
 
 ## Tools
 
+Board-addressed tools take a **`board_id`** (from `board_start`). Item-addressed
+tools take an **`item_id`** and resolve the board from it.
+
 | Tool | Purpose |
 |------|---------|
-| `board_view` | Render the whole board (columns × lanes) — the single pane of glass |
-| `item_create` | Create an epic/story/task/bug/spike; nest via `parent_id` |
+| `board_start` | **Start here.** Create/select a board by name → returns `board_id` (idempotent) |
+| `board_list` | List the boards in the db (id, name, profile, item count) |
+| `board_delete` | Delete a board and everything on it (items, links, labels, comments) — irreversible |
+| `board_view` | Render one board (columns × lanes) — the single pane of glass |
+| `item_create` | Create an epic/story/task/bug/spike on a board; nest via `parent_id` |
+| `item_link` | Link two items: `depends_on` \| `related` \| `discovered_from` (flat, not nested) |
 | `item_move` | Move to a column (and optionally a lane); respects WIP limits |
 | `item_set_spec` | Set `spec_ref` + `spec_status` for SDD tracking |
 | `item_set_blocked` | Flag/unflag blocked with a reason |
 | `item_label` | Add validated `ns:value` labels |
 | `item_comment` | Append to an item's activity log |
-| `lane_configure` | Create/ensure a swim lane |
-| `items_list` | List items with filters (column/lane/parent/kind) |
+| `lane_configure` | Create/ensure a swim lane on a board |
+| `items_list` | List a board's items with filters (column/lane/parent/kind) |
 | `board_export` | Export the renderer-agnostic Snapshot for on-demand/custom UI |
-| `docket_sync` | Import a docket backlog (markdown-on-a-branch) into the board, idempotently |
+| `source_sync` | Project an external source (docket) onto a board, read-only + idempotent |
 
 ## Run
 
 ```sh
 go build -o kanban-mcp ./cmd/kanban-mcp
-./kanban-mcp --db ./runbook.db --plan "Runbook" --agent alice
+./kanban-mcp --db ./runbook.db --agent alice
 ```
+
+An agent then calls `board_start` to create/select a board. (`--plan` still seeds a
+default board for single-board / back-compat use, but is no longer required.)
 
 Register with an MCP client (e.g. Claude Code `.mcp.json`):
 
@@ -151,13 +184,13 @@ Register with an MCP client (e.g. Claude Code `.mcp.json`):
   "mcpServers": {
     "kanban": {
       "command": "/path/to/kanban-mcp",
-      "args": ["--db", "/path/to/runbook.db", "--plan", "Runbook", "--agent", "alice"]
+      "args": ["--db", "/path/to/runbook.db", "--agent", "alice", "--http", ":7777"]
     }
   }
 }
 ```
 
-Env var equivalents: `KANBAN_DB`, `KANBAN_PLAN`, `KANBAN_AGENT`.
+Env var equivalents: `KANBAN_DB`, `KANBAN_PLAN`, `KANBAN_AGENT`, `KANBAN_DOCS_DIR`.
 
 ## Test
 
