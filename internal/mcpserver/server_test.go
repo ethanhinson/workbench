@@ -481,3 +481,23 @@ func TestSnapshotCarriesLayout(t *testing.T) {
 		t.Fatalf("snapshot layout wrong: %+v", snap.Layout)
 	}
 }
+
+// TestItemUpsertValidatesLabels proves item_upsert rejects a malformed label
+// (which would otherwise silently hide the card from every view) but accepts valid
+// view:/lane:/column: placement labels.
+func TestItemUpsertValidatesLabels(t *testing.T) {
+	cs, _ := clientFor(t, "sdd")
+	b := startBoard(t, cs, "Validate board", "sdd")
+
+	// Bogus namespace → rejected.
+	errText := call(t, cs, "item_upsert", map[string]any{
+		"board_id": b, "ext_key": "x:1", "title": "t", "labels": []string{"bogusns:v"},
+	}, nil, true)
+	if !strings.Contains(errText, "namespace") {
+		t.Fatalf("expected namespace rejection, got: %s", errText)
+	}
+	// Valid placement labels → accepted.
+	call(t, cs, "item_upsert", map[string]any{
+		"board_id": b, "ext_key": "x:2", "title": "ok", "labels": []string{"view:specs", "lane:a", "column:done"},
+	}, nil, false)
+}

@@ -58,8 +58,10 @@ board_set_layout { board_id, layout: {
 }}
 ```
 
-The `tasks` view's lanes are **one per active change** — build that list from the
-change folders you found, then set the layout.
+**Ordering matters:** the `tasks` view's lanes are **one per active change**, so
+discover the change folders in Step 1 FIRST, build the `lanes` array from them
+(`{key:<change>, label:<change>}` each), then call `board_set_layout`. A layout set
+before you know the changes would have empty task lanes.
 
 ## Step 4 — hydrate the cards (upsert by ext_key)
 

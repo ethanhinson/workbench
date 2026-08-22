@@ -56,18 +56,35 @@ board_set_layout { board_id, layout: {
 }}
 ```
 
+**Ordering matters:** the `progress` view's lanes are **one per plan** — list the
+plan files in Step 1 FIRST, build the `lanes` array from their slugs, then call
+`board_set_layout` (a layout set before you know the plans has empty lanes).
+
 ## Step 4 — hydrate the cards (upsert by ext_key)
+
+**`<name>` = the plan slug** — the filename with the `YYYY-MM-DD-` date prefix
+stripped (e.g. `2026-07-12-m1-walkable-slice.md` → `m1-walkable-slice`). Use it
+consistently for the plan's `ext_key`, its lane key, and its tasks' keys.
 
 For each **plan** `docs/superpowers/plans/<date>-<name>.md`, `item_upsert`
 `ext_key: "sp:plan:<name>"`: `view:plans`, `content:` the plan markdown,
 `spec_ref:` the path. If it's actively executing, ALSO tag `view:progress`,
 `lane:<name>`.
 
-For each **task** inside a plan (bite-sized steps), upsert
-`ext_key: "sp:plan:<name>:task:<n>"`: `view:progress`, `lane:<name>`,
-`column:done` if its `task-<n>-report.md` exists (or progress.md marks it done),
-else `column:todo`. `item_link depends_on` the plan card. Pull the task's
-brief/report into `content` if present.
+**Tasks — how Superpowers plans actually structure them:** a plan's tasks are
+`### Task N: <title>` headings (sometimes sub-numbered `### Task N.M:`), each with
+bite-sized `- [ ] Step …` items underneath. Parse the `### Task N` headings — NOT
+the step checkboxes — one card per task. **Done-ness is authoritative in
+`.superpowers/sdd/progress.md`**, a ledger of `Task N: complete …` lines; treat a
+task as done if progress.md marks it complete (a `task-N-report.md` file is a
+secondary hint). For each task, `item_upsert`
+`ext_key: "sp:plan:<name>:task:<N>"`: `view:progress`, `lane:<name>`,
+`column:done` if complete else `column:todo`; `item_link depends_on` the plan card;
+pull `task-N-report.md` (if present) into `content`.
+
+> Multiple plans can coexist under one `.superpowers/sdd/`. `progress.md` and the
+> `task-N-*.md` files belong to the plan **currently executing** — associate them
+> with that plan, not a differently-named one.
 
 For each **spec** `docs/superpowers/specs/<date>-<name>.md`, upsert
 `ext_key: "sp:spec:<name>"`, `view:specs`, `content:` the spec markdown.

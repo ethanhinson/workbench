@@ -658,9 +658,11 @@ func (s *Store) CreateItem(ctx context.Context, agentID string, it *board.Item) 
 }
 
 // UpsertByExtKey inserts or updates an item keyed by (plan_id, ext_key). Used by
-// importers (e.g. docket) so re-running a sync updates existing cards in place
-// rather than duplicating them. It bypasses policy gates because the external
-// source is authoritative for the item's state. Labels are fully replaced.
+// the item_upsert tool (methodology hydration) so re-running only updates existing
+// cards rather than duplicating them. It bypasses policy gates (the external source
+// is authoritative for the item's state) but DOES validate labels — a mistagged
+// placement label (view:/lane:/column:) would otherwise silently hide the card
+// from every view. Labels are fully replaced.
 func (s *Store) UpsertByExtKey(ctx context.Context, agentID string, it *board.Item) (*board.Item, error) {
 	if it.ExtKey == "" {
 		return nil, fmt.Errorf("UpsertByExtKey requires ext_key")
@@ -673,6 +675,21 @@ func (s *Store) UpsertByExtKey(ctx context.Context, agentID string, it *board.It
 	}
 	if it.Priority == "" {
 		it.Priority = board.PriorityP2
+	}
+	if it.ColumnKey == "" {
+		it.ColumnKey = "backlog"
+	}
+	colKeys, err := s.columnKeys(ctx, it.PlanID)
+	if err != nil {
+		return nil, err
+	}
+	if !colKeys[it.ColumnKey] {
+		return nil, fmt.Errorf("unknown column %q", it.ColumnKey)
+	}
+	for _, l := range it.Labels {
+		if err := board.ValidateLabel(l, colKeys); err != nil {
+			return nil, err
+		}
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
