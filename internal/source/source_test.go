@@ -92,7 +92,7 @@ func TestDocketSyncIdempotentAndLinks(t *testing.T) {
 	}
 	defer st.Close()
 	ctx := context.Background()
-	plan, _ := st.EnsurePlan(ctx, "P", "", "docket")
+	plan, _ := st.CreatePlan(ctx, "P", "", "", "docket")
 
 	p, err := NewProvider("docket", Config{DocsDir: root})
 	if err != nil {
@@ -168,9 +168,9 @@ func TestUnknownProvider(t *testing.T) {
 	}
 }
 
-// TestImportOntoNamedBoardWhenOthersExist reproduces the install-time bug: with a
-// board already present, the importer must target a DISTINCT board resolved by
-// name (CreatePlan), not the pre-existing/first board. This mirrors what
+// TestImportOntoNamedBoardWhenOthersExist proves the importer targets the board
+// named for the import (via CreatePlan), independent of any other boards already
+// in the db — importing never leaks onto a pre-existing board. Mirrors what
 // cmd/kanban-mcp does for --source.
 func TestImportOntoNamedBoardWhenOthersExist(t *testing.T) {
 	root := writeDocket(t)
@@ -182,7 +182,7 @@ func TestImportOntoNamedBoardWhenOthersExist(t *testing.T) {
 	ctx := context.Background()
 
 	// A pre-existing board (as the shared db has when the MCP server first ran).
-	existing, _ := st.EnsurePlan(ctx, "Plan", "", "sdd")
+	existing, _ := st.CreatePlan(ctx, "Plan", "", "", "sdd")
 
 	// Import targets a differently-named board, resolved by name.
 	target, err := st.CreatePlan(ctx, "fuse: docket backlog", "", "", "docket")

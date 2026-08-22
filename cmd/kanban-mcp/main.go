@@ -1,6 +1,7 @@
-// Command kanban-mcp is an MCP server exposing an SDD-oriented kanban board
-// (plan > epic > story > task) over stdio. One --db file holds one shared plan;
-// each agent connects with its own --agent identity and swim lane.
+// Command kanban-mcp is an MCP server exposing SDD-oriented kanban boards over
+// stdio. One --db file hosts many boards, grouped by project (a directory path);
+// the agent creates or selects a board at runtime with board_start, and each agent
+// connects with its own --agent identity and swim lane.
 package main
 
 import (
@@ -20,7 +21,7 @@ import (
 func main() {
 	var (
 		dbPath  = flag.String("db", envOr("KANBAN_DB", "kanban.db"), "path to the SQLite plan database")
-		plan    = flag.String("plan", envOr("KANBAN_PLAN", ""), "board to seed/focus; empty => don't seed a board (agents create boards at runtime via board_start)")
+		plan    = flag.String("plan", envOr("KANBAN_PLAN", ""), "board to focus: the viz default board and the --source import target (create-or-select by name). Empty => agents create boards at runtime via board_start")
 		project = flag.String("project", envOr("KANBAN_PROJECT", ""), "default project (a directory path) new boards belong to; empty => the working directory")
 		agent   = flag.String("agent", envOr("KANBAN_AGENT", "agent"), "calling agent id (its default swim lane)")
 		profile = flag.String("profile", envOr("KANBAN_PROFILE", "sdd"), "methodology profile on first init: sdd|scrum|kanban")
@@ -52,14 +53,12 @@ func main() {
 	}
 
 	ctx := context.Background()
-	srv, _, err := mcpserver.New(ctx, st, *plan, *agent, *profile, proj)
-	if err != nil {
-		log.Fatalf("build server: %v", err)
-	}
+	srv, _ := mcpserver.New(st, *agent, *profile, proj)
 
-	// The viz default board id. When --plan names a board we use it as the default;
-	// otherwise the viz picks the first board in the db (and the SPA's picker
-	// switches among all of them), so no empty placeholder board is created.
+	// The viz default board id. When --plan names a board (create-or-select in the
+	// default project) we use it as the viz default and as the --source import
+	// target; otherwise the viz picks the first board in the db and the SPA's
+	// picker switches among all of them.
 	focusID := ""
 	if *plan != "" {
 		p, err := st.CreatePlan(ctx, *plan, proj, "", *profile)

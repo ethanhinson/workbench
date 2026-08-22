@@ -20,11 +20,9 @@ CREATE TABLE IF NOT EXISTS plan (
     lane_dim    TEXT NOT NULL DEFAULT 'agent', -- what a swim lane means under this profile
     policies    TEXT NOT NULL DEFAULT '{}',  -- JSON-encoded board.Policies (the enforcement rules)
     created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
+    updated_at  TEXT NOT NULL,
+    UNIQUE (project, name)              -- board names are unique WITHIN a project
 );
--- Board name is unique per project (not globally), enforced by index so it works
--- for both fresh and migrated databases.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_project_name ON plan(project, name);
 
 -- Workflow columns (stages). Seeded with SDD-opinionated defaults, overridable.
 CREATE TABLE IF NOT EXISTS column_def (

@@ -19,7 +19,7 @@ func TestItemDetailWithLinksNoDeadlock(t *testing.T) {
 	}
 	defer st.Close()
 	ctx := context.Background()
-	p, _ := st.EnsurePlan(ctx, "P", "", "docket")
+	p, _ := st.CreatePlan(ctx, "P", "", "", "docket")
 
 	a, _ := st.CreateItem(ctx, "x", &board.Item{PlanID: p.ID, Kind: board.KindStory, Title: "#1 A", ColumnKey: "backlog", LaneKey: "feat"})
 	b, _ := st.CreateItem(ctx, "x", &board.Item{PlanID: p.ID, Kind: board.KindStory, Title: "#2 B", ColumnKey: "backlog", LaneKey: "feat"})

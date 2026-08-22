@@ -37,11 +37,13 @@ func main() {
 	}
 	defer st.Close()
 
-	srv, mcpSrv, err := mcpserver.New(ctx, st, "Fuse Backlog", "agent", "docket", "demo")
+	srv, _ := mcpserver.New(st, "agent", "docket", "demo")
+	// The demo drives one fixed board; create it up front.
+	plan, err := st.CreatePlan(ctx, "Fuse Backlog", "demo", "", "docket")
 	if err != nil {
 		log.Fatal(err)
 	}
-	planID := mcpSrv.PlanID()
+	planID := plan.ID
 
 	// Connect an in-memory MCP client — this is exactly how an agent drives it.
 	s2c, c2s := mcp.NewInMemoryTransports()

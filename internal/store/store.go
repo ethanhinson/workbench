@@ -9,7 +9,6 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/ethanhinson/kanban-mcp/internal/board"
@@ -34,120 +33,11 @@ func Open(path string) (*Store, error) {
 	}
 	// modernc sqlite is safe for concurrent use; a small pool avoids "database locked".
 	db.SetMaxOpenConns(1) // single writer keeps WAL semantics simple for multi-agent writes
-	if err := migrate(context.Background(), db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate: %w", err)
-	}
 	if _, err := db.ExecContext(context.Background(), schemaSQL); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
 	return &Store{db: db, broker: newBroker()}, nil
-}
-
-// migrate brings a pre-existing database up to the current schema before the
-// idempotent schema.sql runs. Today it upgrades the boards-per-project model:
-// older `plan` tables lack the `project` column and carry a global UNIQUE(name)
-// constraint that must become per-project. Runs before schema.sql so the new
-// CREATE UNIQUE INDEX on (project, name) can succeed.
-func migrate(ctx context.Context, db *sql.DB) error {
-	// Is there an existing plan table? (Empty/new db → nothing to migrate.)
-	var planSQL string
-	err := db.QueryRowContext(ctx,
-		`SELECT sql FROM sqlite_master WHERE type='table' AND name='plan'`).Scan(&planSQL)
-	if err == sql.ErrNoRows {
-		return nil // fresh db; schema.sql creates the current shape
-	}
-	if err != nil {
-		return err
-	}
-
-	// 1) Add the project column if it's missing.
-	hasProject := false
-	rows, err := db.QueryContext(ctx, `PRAGMA table_info(plan)`)
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var cid int
-		var name, ctype string
-		var notnull, pk int
-		var dflt sql.NullString
-		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			rows.Close()
-			return err
-		}
-		if name == "project" {
-			hasProject = true
-		}
-	}
-	rows.Close()
-	if !hasProject {
-		if _, err := db.ExecContext(ctx, `ALTER TABLE plan ADD COLUMN project TEXT NOT NULL DEFAULT ''`); err != nil {
-			return err
-		}
-	}
-
-	// 2) Drop the legacy global UNIQUE(name). SQLite can't ALTER away a table-level
-	// constraint, so rebuild the table without it when the old DDL still has it.
-	// The per-project uniqueness is (re)created by schema.sql's index afterward.
-	//
-	// This follows SQLite's supported table-rebuild procedure. Critically,
-	// legacy_alter_table MUST be ON for the rebuild: with the modern default (OFF),
-	// `ALTER TABLE plan RENAME TO plan_old` rewrites child tables' REFERENCES
-	// plan(id) to point at plan_old, which then dangles after we drop plan_old
-	// (any FK-checked INSERT fails with "no such table: plan_old"). With legacy
-	// mode on, RENAME leaves child references naming "plan", so the new plan table
-	// satisfies them. foreign_keys is also disabled so the transient rename can't
-	// trip enforcement. Neither pragma can be toggled inside a transaction.
-	if strings.Contains(planSQL, "UNIQUE (name)") || strings.Contains(planSQL, "UNIQUE(name)") {
-		if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
-			return err
-		}
-		if _, err := db.ExecContext(ctx, `PRAGMA legacy_alter_table=ON`); err != nil {
-			return err
-		}
-		rebuild := func() error {
-			tx, err := db.BeginTx(ctx, nil)
-			if err != nil {
-				return err
-			}
-			defer tx.Rollback()
-			stmts := []string{
-				`ALTER TABLE plan RENAME TO plan_old`,
-				`CREATE TABLE plan (
-					id          TEXT PRIMARY KEY,
-					name        TEXT NOT NULL,
-					project     TEXT NOT NULL DEFAULT '',
-					description TEXT NOT NULL DEFAULT '',
-					profile     TEXT NOT NULL DEFAULT 'sdd',
-					lane_dim    TEXT NOT NULL DEFAULT 'agent',
-					policies    TEXT NOT NULL DEFAULT '{}',
-					created_at  TEXT NOT NULL,
-					updated_at  TEXT NOT NULL
-				)`,
-				`INSERT INTO plan(id,name,project,description,profile,lane_dim,policies,created_at,updated_at)
-				 SELECT id,name,project,description,profile,lane_dim,policies,created_at,updated_at FROM plan_old`,
-				`DROP TABLE plan_old`,
-			}
-			for _, q := range stmts {
-				if _, err := tx.ExecContext(ctx, q); err != nil {
-					return fmt.Errorf("rebuild plan: %w", err)
-				}
-			}
-			return tx.Commit()
-		}
-		err := rebuild()
-		// Restore pragmas regardless of the rebuild outcome.
-		db.ExecContext(ctx, `PRAGMA legacy_alter_table=OFF`)
-		if _, e2 := db.ExecContext(ctx, `PRAGMA foreign_keys=ON`); e2 != nil && err == nil {
-			err = e2
-		}
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // Broker returns the store's change-notification broker. Consumers (the SSE
@@ -169,25 +59,6 @@ func (s *Store) Close() error { return s.db.Close() }
 
 func now() string    { return time.Now().UTC().Format(time.RFC3339) }
 func newID() string  { return ulid.Make().String() }
-
-// EnsurePlan is the single-board convenience: it returns the first plan in the db
-// (whatever its name), creating one (in the default "" project) from the named
-// profile if the db is empty. It exists for callers that treat the file as one
-// board. Multi-board callers use CreatePlan / GetPlanByName instead. An unknown
-// profileKey falls back to "sdd".
-func (s *Store) EnsurePlan(ctx context.Context, name, description, profileKey string) (*board.Plan, error) {
-	var p board.Plan
-	row := s.db.QueryRowContext(ctx,
-		`SELECT id,name,project,description,profile,lane_dim,policies,created_at,updated_at FROM plan ORDER BY created_at LIMIT 1`)
-	err := row.Scan(&p.ID, &p.Name, &p.Project, &p.Description, &p.ProfileKey, &p.LaneDimension, &p.PoliciesJSON, &p.CreatedAt, &p.UpdatedAt)
-	if err == nil {
-		return &p, nil // existing plan keeps its profile; profileKey arg is ignored
-	}
-	if err != sql.ErrNoRows {
-		return nil, err
-	}
-	return s.CreatePlan(ctx, name, "", description, profileKey)
-}
 
 // CreatePlan creates a board (plan) in a project from the named methodology
 // profile, seeding its columns, seed lanes, lane dimension, and enforcement

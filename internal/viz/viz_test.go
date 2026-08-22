@@ -22,7 +22,7 @@ func TestSSEPushesOnMutation(t *testing.T) {
 	}
 	defer st.Close()
 	ctx := context.Background()
-	plan, _ := st.EnsurePlan(ctx, "P", "", "sdd")
+	plan, _ := st.CreatePlan(ctx, "P", "", "", "sdd")
 
 	srv := httptest.NewServer(NewServer(st, plan.ID).Handler())
 	defer srv.Close()

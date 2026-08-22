@@ -23,10 +23,7 @@ func clientFor(t *testing.T, profile string) (*mcp.ClientSession, *store.Store) 
 	}
 	t.Cleanup(func() { st.Close() })
 
-	srv, _, err := New(ctx, st, "Test Plan", "alice", profile, "testproj")
-	if err != nil {
-		t.Fatal(err)
-	}
+	srv, _ := New(st, "alice", profile, "testproj")
 	st1, ct := mcp.NewInMemoryTransports()
 	if _, err := srv.Connect(ctx, st1, nil); err != nil {
 		t.Fatal(err)
@@ -193,11 +190,11 @@ func TestBoardIsolation(t *testing.T) {
 		t.Fatalf("board B should be empty, got %d items", len(snapB.Items))
 	}
 
-	// board_list sees both (plus the seeded default board from clientFor).
+	// board_list sees exactly the two boards started here (the server seeds none).
 	var boards boardListOut
 	call(t, cs, "board_list", map[string]any{}, &boards, false)
-	if len(boards.Boards) < 2 {
-		t.Fatalf("board_list should see at least 2 boards, got %d", len(boards.Boards))
+	if len(boards.Boards) != 2 {
+		t.Fatalf("board_list should see 2 boards, got %d", len(boards.Boards))
 	}
 
 	// A tool call with a bogus board_id is rejected with guidance.
@@ -257,9 +254,9 @@ func TestBoardsByProject(t *testing.T) {
 	}
 }
 
-// TestNoSeedWhenPlanEmpty proves that starting the server without a plan name
-// seeds NO board — the runtime-board model, no empty placeholder left behind.
-func TestNoSeedWhenPlanEmpty(t *testing.T) {
+// TestServerSeedsNoBoard proves the server creates no board at construction — the
+// runtime-board model, where the db is empty until the agent calls board_start.
+func TestServerSeedsNoBoard(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(filepath.Join(t.TempDir(), "it.db"))
 	if err != nil {
@@ -267,15 +264,8 @@ func TestNoSeedWhenPlanEmpty(t *testing.T) {
 	}
 	t.Cleanup(func() { st.Close() })
 
-	srv, s, err := New(ctx, st, "", "alice", "sdd", "testproj")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.PlanID() != "" {
-		t.Fatalf("empty plan name must seed no board, got PlanID %q", s.PlanID())
-	}
-	boards, _ := st.ListPlans(ctx)
-	if len(boards) != 0 {
+	srv, _ := New(st, "alice", "sdd", "testproj")
+	if boards, _ := st.ListPlans(ctx); len(boards) != 0 {
 		t.Fatalf("no board should exist before board_start, got %d", len(boards))
 	}
 

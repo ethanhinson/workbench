@@ -10,34 +10,26 @@ package board
 // per-view placement so a renderer can lay out any tab without recomputing the
 // taxonomy. Dependencies are shown as links, never as nesting.
 type Snapshot struct {
-	SchemaVersion int             `json:"schema_version"`
-	Plan          SnapshotPlan    `json:"plan"`
-	Columns       []ColumnDef     `json:"columns"` // underlying item columns (docket lifecycle)
-	Lanes         []Lane          `json:"lanes"`
-	Items         []Item          `json:"items"` // flat
-	Links         []Link          `json:"links"`
-	Views         []ViewDef       `json:"views"`
-	Cells         map[string]Cell `json:"cells"` // legacy raw grid "lane|column" -> item ids
-	Stats         SnapshotStats   `json:"stats"`
+	SchemaVersion int           `json:"schema_version"`
+	Plan          SnapshotPlan  `json:"plan"`
+	Columns       []ColumnDef   `json:"columns"` // underlying item columns (docket lifecycle)
+	Lanes         []Lane        `json:"lanes"`
+	Items         []Item        `json:"items"` // flat; each carries its per-view placement
+	Links         []Link        `json:"links"`
+	Views         []ViewDef     `json:"views"`
+	Stats         SnapshotStats `json:"stats"`
 }
 
-const SnapshotSchemaVersion = 2
+const SnapshotSchemaVersion = 3
 
 // SnapshotPlan carries the methodology binding so a renderer can label the axes
 // correctly ("lane = agent" vs "lane = epic" vs "lane = class of service").
 type SnapshotPlan struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`
+	Project       string `json:"project,omitempty"`
 	ProfileKey    string `json:"profile"`
 	LaneDimension string `json:"lane_dimension"`
-}
-
-// Cell is one column x lane intersection, holding the ids of the items in it
-// (ordered). Renderers look items up in the flat Items slice by id.
-type Cell struct {
-	Lane    string   `json:"lane"`
-	Column  string   `json:"column"`
-	ItemIDs []string `json:"item_ids"`
 }
 
 // ItemDetail is the full-detail payload for one card (the click-through view):
@@ -75,7 +67,7 @@ func BuildSnapshot(plan Plan, cols []ColumnDef, lanes []Lane, items []Item, link
 	snap := Snapshot{
 		SchemaVersion: SnapshotSchemaVersion,
 		Plan: SnapshotPlan{
-			ID: plan.ID, Name: plan.Name,
+			ID: plan.ID, Name: plan.Name, Project: plan.Project,
 			ProfileKey: plan.ProfileKey, LaneDimension: plan.LaneDimension,
 		},
 		Columns: cols,
@@ -83,7 +75,6 @@ func BuildSnapshot(plan Plan, cols []ColumnDef, lanes []Lane, items []Item, link
 		Items:   items,
 		Links:   links,
 		Views:   Views(),
-		Cells:   map[string]Cell{},
 		Stats: SnapshotStats{
 			ByColumn: map[string]int{}, ByLane: map[string]int{}, BySpecStatus: map[string]int{},
 		},
@@ -107,12 +98,6 @@ func BuildSnapshot(plan Plan, cols []ColumnDef, lanes []Lane, items []Item, link
 		if lane == "" {
 			lane = "shared"
 		}
-		key := lane + "|" + it.ColumnKey
-		c := snap.Cells[key]
-		c.Lane, c.Column = lane, it.ColumnKey
-		c.ItemIDs = append(c.ItemIDs, it.ID)
-		snap.Cells[key] = c
-
 		snap.Stats.TotalItems++
 		snap.Stats.ByColumn[it.ColumnKey]++
 		snap.Stats.ByLane[lane]++

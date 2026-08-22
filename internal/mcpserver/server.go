@@ -15,58 +15,35 @@ import (
 )
 
 // Server binds the store and the calling agent's identity to the MCP tools. It is
-// NOT pinned to one board: a database hosts many boards (plans), and every item
-// tool names its board_id explicitly. The agent creates/selects a board at
-// runtime with board_start. defaultBoardID is the board seeded at construction
-// (used to wire the viz layer and as a back-compat single-board default).
+// never pinned to a board: a database hosts many boards (plans), the agent creates
+// or selects one at runtime with board_start, and every item tool names its
+// board_id explicitly. No board is created at construction.
 type Server struct {
 	st             *store.Store
 	agentID        string // this server instance's owning agent; event attribution + default lane
 	defaultProfile string // profile used when board_start omits one
 	defaultProject string // project boards land in when board_start omits one (a dir path)
-	defaultBoardID string // board seeded at New() time; what PlanID() reports
 }
-
-// PlanID returns the id of the board this server seeded at construction, or ""
-// when nothing was seeded (no planName given). Used to wire the viz default board;
-// other boards created via board_start are addressed by their own ids.
-func (s *Server) PlanID() string { return s.defaultBoardID }
 
 // New builds an MCP server over the given db. agentID identifies the agent driving
 // this instance. profileKey is the default methodology (sdd|scrum|kanban|...) used
 // for any board_start that omits a profile. defaultProject is the project boards
 // land in when board_start doesn't name one — by default the server's working
 // directory, so one shared db groups boards by project.
-//
-// planName controls the connect-time seed: pass a name to seed that one board in
-// defaultProject (single-board / back-compat use, reported via PlanID()), or pass
-// "" to seed NOTHING — the runtime-board model, where the agent creates boards on
-// demand with board_start and no empty default board is left lying around.
-func New(ctx context.Context, st *store.Store, planName, agentID, profileKey, defaultProject string) (*mcp.Server, *Server, error) {
+func New(st *store.Store, agentID, profileKey, defaultProject string) (*mcp.Server, *Server) {
 	if agentID == "" {
 		agentID = "agent"
 	}
 	if profileKey == "" {
 		profileKey = "sdd"
 	}
-
 	s := &Server{st: st, agentID: agentID, defaultProfile: profileKey, defaultProject: defaultProject}
-	if planName != "" {
-		plan, err := st.CreatePlan(ctx, planName, defaultProject, "", profileKey)
-		if err != nil {
-			return nil, nil, err
-		}
-		s.defaultBoardID = plan.ID
-		if err := s.ensureAgentLane(ctx, plan); err != nil {
-			return nil, nil, err
-		}
-	}
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "kanban-mcp",
 		Version: "0.1.0",
 	}, nil)
 	s.register(srv)
-	return srv, s, nil
+	return srv, s
 }
 
 // ensureAgentLane auto-creates a per-agent lane, but only when the board's profile

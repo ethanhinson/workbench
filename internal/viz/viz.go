@@ -22,8 +22,8 @@ var staticFS embed.FS
 
 // Server serves the board API + reference SPA over one database of many boards.
 // A request selects its board with ?board=<id>; defaultPlan is the fallback when
-// the query is absent (the board seeded at startup), so single-board setups need
-// no query at all.
+// the query is absent (may be "" — then the first board in the db is shown and the
+// SPA picker switches among all of them).
 type Server struct {
 	st          *store.Store
 	defaultPlan string
