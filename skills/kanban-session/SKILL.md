@@ -52,6 +52,7 @@ project MCP config wasn't approved — re-open the project and approve it.
 | `board_start` | **Start here.** Create/select a board by name → returns `board_id`. Optional `profile` (sdd\|scrum\|kanban). Idempotent by name. |
 | `board_list` | List boards in the db (id, name, profile, item count) to pick or resume one. |
 | `board_delete` | Delete a board (`board_id`) and everything on it — irreversible. Clean up throwaway/finished boards. |
+| `board_rename` | Rename a board (`board_id`, `name`) — names are unique across the db. |
 | `board_view` | See one board (`board_id`) as columns × lanes before planning or moving work. |
 | `item_create` | Add an item (`board_id` + `epic\|story\|task\|bug\|spike`). Nest with `parent_id`. |
 | `item_link` | Link two items (`board_id`, `from_id`, `to_id`, `kind`: depends_on\|related\|discovered_from). Flat, not nested. |

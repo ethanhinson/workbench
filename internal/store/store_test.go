@@ -270,3 +270,35 @@ func TestDeletePlanCascades(t *testing.T) {
 		t.Fatal("deleting a missing board should error")
 	}
 }
+
+// TestRenamePlan covers rename, the unique-name clash, same-name no-op, and a
+// missing board.
+func TestRenamePlan(t *testing.T) {
+	st, keep := newTestStore(t)
+	ctx := context.Background()
+	other, _ := st.CreatePlan(ctx, "Other", "", "sdd")
+
+	if err := st.RenamePlan(ctx, keep.ID, "Renamed"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := st.LoadPlan(ctx, keep.ID)
+	if got.Name != "Renamed" {
+		t.Fatalf("name not updated, got %q", got.Name)
+	}
+
+	// Renaming to a name another board holds is rejected.
+	if err := st.RenamePlan(ctx, keep.ID, "Other"); err == nil {
+		t.Fatal("expected clash error renaming to an existing name")
+	}
+	// A board may keep its own name (no-op).
+	if err := st.RenamePlan(ctx, other.ID, "Other"); err != nil {
+		t.Fatalf("same-name rename should be a no-op, got: %v", err)
+	}
+	// Empty name and missing board are rejected.
+	if err := st.RenamePlan(ctx, keep.ID, ""); err == nil {
+		t.Fatal("expected error on empty name")
+	}
+	if err := st.RenamePlan(ctx, "nope", "Whatever"); err == nil {
+		t.Fatal("expected error renaming a missing board")
+	}
+}

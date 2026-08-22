@@ -154,6 +154,7 @@ tools take an **`item_id`** and resolve the board from it.
 | `board_start` | **Start here.** Create/select a board by name → returns `board_id` (idempotent) |
 | `board_list` | List the boards in the db (id, name, profile, item count) |
 | `board_delete` | Delete a board and everything on it (items, links, labels, comments) — irreversible |
+| `board_rename` | Rename a board (names are unique across the db) |
 | `board_view` | Render one board (columns × lanes) — the single pane of glass |
 | `item_create` | Create an epic/story/task/bug/spike on a board; nest via `parent_id` |
 | `item_link` | Link two items: `depends_on` \| `related` \| `discovered_from` (flat, not nested) |

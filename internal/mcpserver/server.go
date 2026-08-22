@@ -113,6 +113,12 @@ func (s *Server) register(srv *mcp.Server) {
 	}, s.boardDelete)
 
 	mcp.AddTool(srv, &mcp.Tool{
+		Name: "board_rename",
+		Description: "Rename a board (board_id) to a new name. Names are unique across the db; renaming " +
+			"to a name already in use is rejected.",
+	}, s.boardRename)
+
+	mcp.AddTool(srv, &mcp.Tool{
 		Name: "board_view",
 		Description: "Render one board (identified by board_id) as columns x swim lanes: the single pane of " +
 			"glass. Use to see current state before planning or moving work.",
@@ -248,6 +254,22 @@ func (s *Server) boardDelete(ctx context.Context, _ *mcp.CallToolRequest, in boa
 		return nil, itemOut{}, err
 	}
 	return nil, itemOut{ID: plan.ID, Message: fmt.Sprintf("deleted board %q", plan.Name)}, nil
+}
+
+type boardRenameIn struct {
+	BoardID string `json:"board_id" jsonschema:"the board to rename (from board_list)"`
+	Name    string `json:"name" jsonschema:"the new board name (must be unique across the db)"`
+}
+
+func (s *Server) boardRename(ctx context.Context, _ *mcp.CallToolRequest, in boardRenameIn) (*mcp.CallToolResult, itemOut, error) {
+	plan, err := s.resolveBoard(ctx, in.BoardID)
+	if err != nil {
+		return nil, itemOut{}, err
+	}
+	if err := s.st.RenamePlan(ctx, plan.ID, in.Name); err != nil {
+		return nil, itemOut{}, err
+	}
+	return nil, itemOut{ID: plan.ID, Message: fmt.Sprintf("renamed %q -> %q", plan.Name, in.Name)}, nil
 }
 
 type boardViewIn struct {

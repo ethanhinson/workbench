@@ -280,3 +280,40 @@ func TestBoardDeleteThroughMCP(t *testing.T) {
 	// Deleting a nonexistent board is rejected.
 	call(t, cs, "board_delete", map[string]any{"board_id": "nope"}, nil, true)
 }
+
+// TestBoardRenameThroughMCP proves board_rename updates the name over the wire,
+// reflects in board_list, and rejects a duplicate name and an unknown board.
+func TestBoardRenameThroughMCP(t *testing.T) {
+	cs, _ := clientFor(t, "sdd")
+	a := startBoard(t, cs, "Old Name", "sdd")
+	startBoard(t, cs, "Taken", "sdd")
+
+	var out idResult
+	call(t, cs, "board_rename", map[string]any{"board_id": a, "name": "New Name"}, &out, false)
+	if !strings.Contains(out.Message, "New Name") {
+		t.Fatalf("unexpected rename message: %s", out.Message)
+	}
+
+	var boards boardListOut
+	call(t, cs, "board_list", map[string]any{}, &boards, false)
+	var found bool
+	for _, b := range boards.Boards {
+		if b.ID == a {
+			if b.Name != "New Name" {
+				t.Fatalf("board_list shows stale name %q", b.Name)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("renamed board missing from board_list")
+	}
+
+	// Renaming to an existing name is rejected.
+	errText := call(t, cs, "board_rename", map[string]any{"board_id": a, "name": "Taken"}, nil, true)
+	if !strings.Contains(errText, "already exists") {
+		t.Fatalf("expected duplicate-name rejection, got: %s", errText)
+	}
+	// Renaming an unknown board is rejected.
+	call(t, cs, "board_rename", map[string]any{"board_id": "nope", "name": "X"}, nil, true)
+}

@@ -222,6 +222,37 @@ func (s *Store) DeletePlan(ctx context.Context, planID string) error {
 	return s.commit(tx)
 }
 
+// RenamePlan changes a board's name. Board names are unique (board_start selects
+// by name), so a clash returns a clear error rather than a raw constraint failure.
+// Returns an error if the board doesn't exist.
+func (s *Store) RenamePlan(ctx context.Context, planID, newName string) error {
+	if newName == "" {
+		return fmt.Errorf("new board name is required")
+	}
+	// Reject a name already taken by a different board (before hitting the UNIQUE
+	// index, so the message names the conflict).
+	var clashID string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM plan WHERE name=?`, newName).Scan(&clashID)
+	switch {
+	case err == nil && clashID != planID:
+		return fmt.Errorf("a board named %q already exists", newName)
+	case err == nil:
+		return nil // same board already has this name: no-op
+	case err != sql.ErrNoRows:
+		return err
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE plan SET name=?, updated_at=? WHERE id=?`, newName, now(), planID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("board %q not found", planID)
+	}
+	s.broker.notify() // live UI + sidebar reflect the new name
+	return nil
+}
+
 // LoadPlan returns the single plan row with all fields populated.
 func (s *Store) LoadPlan(ctx context.Context, planID string) (*board.Plan, error) {
 	var p board.Plan
