@@ -8,24 +8,22 @@ description: Use when the user wants a live kanban board of the work happening i
 ## Overview
 
 `kanban-mcp` is wired into Claude Code as the **`kanban`** MCP server (see the
-repo's `.mcp.json`). The mental model is docket-like:
+repo's `.mcp.json`). The mental model:
 
 1. **Start a board** with `board_start` — you get back a `board_id`.
-2. **Add work** to it: `item_create` tasks/todos, `item_link` their dependencies.
-3. **Drive it** as the session progresses: `item_move`, `item_set_spec`, etc.
+2. **Shape it** with `board_set_layout` — declare the nav tabs + views (a board
+   renders nothing until it has a layout).
+3. **Add work**: `item_create` (or `item_upsert` for source-keyed cards), tagging
+   each with `view:`/`lane:`/`column:` labels so it lands where you want; `item_link`
+   dependencies.
 
-One database (`.kanban/session.db`) hosts **many boards** — starting a board
-creates or selects one by name, so you can run several in parallel (this
-session's work, a refactor, a docs pass) and switch between them in the UI.
+One database hosts **many boards**, grouped by project (a directory path) — run
+several in parallel and switch between them in the UI.
 
-The board process owns your **live, in-flight work**. Backlog, done, and ADRs are
-**decoupled read-only inputs** projected in from an external source (docket today)
-via `source_sync` — the board never owns that data.
-
-| Source | How it reaches the board | Direction |
-|---|---|---|
-| **this session** | you call `board_start` → `item_create`/`item_link`/`item_move` | live, first-party |
-| **docket / other sources** | `source_sync` projects backlog/done/ADRs onto a board | read-only mirror |
+**For a project that uses a methodology tool** (docket / OpenSpec / Superpowers),
+don't hand-build the board — use the matching skill (**kanban-docket**,
+**kanban-openspec**, **kanban-superpowers**), or **kanban-methodologies** to pick.
+This `kanban-session` skill is for **ad-hoc session work** you shape by hand.
 
 ## Prerequisites
 
@@ -59,17 +57,20 @@ session's boards are grouped under it rather than the server's cwd.
 | `board_delete` | Delete a board (`board_id`) and everything on it — irreversible. Clean up throwaway/finished boards. |
 | `board_rename` | Rename a board (`board_id`, `name`) — names are unique within a project. |
 | `board_set_project` | Move a board (`board_id`, `project`) to a different project — e.g. re-home an older board under its repo. |
-| `board_view` | See one board (`board_id`) as columns × lanes before planning or moving work. |
-| `item_create` | Add an item (`board_id` + `epic\|story\|task\|bug\|spike`). Nest with `parent_id`. |
+| `board_set_layout` | **Shape the board:** declare `nav` tabs + `views` (type `list\|lanes\|board\|doc`). A board renders nothing until this is set. |
+| `board_get_layout` | Read the current layout to tweak it. |
+| `board_view` | See one board (`board_id`) as columns × lanes (text form). |
+| `item_create` | Add an item (`board_id` + `epic\|story\|task\|bug\|spike`); tag `view:`/`lane:`/`column:` + `content`. Nest with `parent_id`. |
+| `item_upsert` | Create-or-update a card by `ext_key` (idempotent) with `content` + placement labels — the hydration primitive. |
+| `item_set_content` | Replace a card's `content` (the doc markdown a `doc` view renders). |
 | `item_link` | Link two items (`board_id`, `from_id`, `to_id`, `kind`: depends_on\|related\|discovered_from). Flat, not nested. |
-| `item_move` | Move an item to a column: `backlog\|specifying\|specd\|in_progress\|review\|done`. |
+| `item_move` | Move an item to a profile column: `backlog\|specifying\|specd\|in_progress\|review\|done` (orthogonal to view placement). |
 | `item_set_spec` | Set spec ref + status `missing\|draft\|approved` (SDD heartbeat). |
-| `item_set_blocked` | Flag/unflag blocked, with a reason. Orthogonal to the column. |
-| `item_label` | Namespaced labels `type: priority: spec: stage: agent: area:` as `ns:value`. |
-| `item_comment` | Append to an item's activity log — capture what was discussed/decided. |
-| `items_list` | List a board's items with filters (column, lane, parent, kind). |
-| `board_export` | The full renderer-agnostic Snapshot for a board (for a custom UI). |
-| `source_sync` | Project an external source (`source: docket`, `docs_dir: …`) onto a board, read-only + idempotent. |
+| `item_set_blocked` | Flag/unflag blocked, with a reason. |
+| `item_label` | Namespaced labels incl. `view: lane: column:` (placement) + `type: priority: spec: area:` as `ns:value`. |
+| `item_comment` | Append to an item's activity log. |
+| `items_list` | List a board's items with filters. |
+| `board_export` | The full renderer-agnostic Snapshot (incl. layout) for a custom UI. |
 
 The **sdd** profile enforces: nothing leaves `specd` until its
 `spec_status=approved`, and blocked items can't advance — the server rejects
