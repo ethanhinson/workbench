@@ -387,3 +387,97 @@ func TestBoardSetProjectThroughMCP(t *testing.T) {
 	// Unknown board is rejected.
 	call(t, cs, "board_set_project", map[string]any{"board_id": "nope", "project": "/p/x"}, nil, true)
 }
+
+// TestItemUpsertAndContentThroughMCP proves item_upsert is idempotent by ext_key,
+// carries content + placement labels, and item_set_content updates content.
+func TestItemUpsertAndContentThroughMCP(t *testing.T) {
+	cs, _ := clientFor(t, "sdd")
+	b := startBoard(t, cs, "OpenSpec board", "sdd")
+
+	// First upsert creates the card with content + placement labels.
+	var first idResult
+	call(t, cs, "item_upsert", map[string]any{
+		"board_id": b, "ext_key": "openspec:auth", "title": "Auth change",
+		"content": "# Auth\nproposal body", "labels": []string{"view:specs", "lane:proposed"},
+	}, &first, false)
+	if first.ID == "" {
+		t.Fatal("upsert returned no id")
+	}
+
+	// Re-upsert with the same ext_key updates in place (same id, no duplicate).
+	var second idResult
+	call(t, cs, "item_upsert", map[string]any{
+		"board_id": b, "ext_key": "openspec:auth", "title": "Auth change (v2)",
+		"content": "# Auth\nrevised", "labels": []string{"view:specs", "lane:approved"},
+	}, &second, false)
+	if second.ID != first.ID {
+		t.Fatalf("upsert should update in place: %s vs %s", first.ID, second.ID)
+	}
+
+	// Exactly one item, with the updated content + title.
+	var snap board.Snapshot
+	call(t, cs, "board_export", map[string]any{"board_id": b}, &snap, false)
+	if len(snap.Items) != 1 {
+		t.Fatalf("upsert duplicated: %d items", len(snap.Items))
+	}
+	it := snap.Items[0]
+	if it.Title != "Auth change (v2)" || it.Content != "# Auth\nrevised" {
+		t.Fatalf("upsert did not update fields: %+v", it)
+	}
+	// Placement labels are present.
+	var hasView, hasLane bool
+	for _, l := range it.Labels {
+		if l.NS == "view" && l.Value == "specs" {
+			hasView = true
+		}
+		if l.NS == "lane" && l.Value == "approved" {
+			hasLane = true
+		}
+	}
+	if !hasView || !hasLane {
+		t.Fatalf("placement labels missing: %+v", it.Labels)
+	}
+
+	// item_set_content updates just the content.
+	call(t, cs, "item_set_content", map[string]any{"item_id": first.ID, "content": "# Auth\nfinal"}, nil, false)
+	call(t, cs, "board_export", map[string]any{"board_id": b}, &snap, false)
+	if snap.Items[0].Content != "# Auth\nfinal" {
+		t.Fatalf("set_content did not update: %q", snap.Items[0].Content)
+	}
+}
+
+// TestSnapshotCarriesLayout proves the snapshot ships the board's layout + has_layout
+// and that item content round-trips into the export.
+func TestSnapshotCarriesLayout(t *testing.T) {
+	cs, _ := clientFor(t, "sdd")
+	b := startBoard(t, cs, "Layout board", "sdd")
+
+	// No layout yet.
+	var snap board.Snapshot
+	call(t, cs, "board_export", map[string]any{"board_id": b}, &snap, false)
+	if snap.HasLayout {
+		t.Fatal("fresh board should report has_layout=false")
+	}
+	if snap.SchemaVersion != board.SnapshotSchemaVersion {
+		t.Fatalf("schema version: got %d want %d", snap.SchemaVersion, board.SnapshotSchemaVersion)
+	}
+
+	// Set a layout, then it appears in the snapshot.
+	call(t, cs, "board_set_layout", map[string]any{
+		"board_id": b,
+		"layout": map[string]any{
+			"nav": []map[string]any{{"id": "specs", "label": "Specs", "view": "specs"}},
+			"views": map[string]any{
+				"specs": map[string]any{"type": "doc"},
+			},
+		},
+	}, nil, false)
+
+	call(t, cs, "board_export", map[string]any{"board_id": b}, &snap, false)
+	if !snap.HasLayout {
+		t.Fatal("board_export should report has_layout=true after set_layout")
+	}
+	if len(snap.Layout.Nav) != 1 || snap.Layout.Nav[0].ID != "specs" || snap.Layout.Views["specs"].Type != board.ViewDoc {
+		t.Fatalf("snapshot layout wrong: %+v", snap.Layout)
+	}
+}

@@ -10,8 +10,6 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/ethanhinson/kanban-mcp/internal/store"
@@ -23,11 +21,11 @@ var staticFS embed.FS
 // Server serves the board API + reference SPA over one database of many boards.
 // A request selects its board with ?board=<id>; defaultPlan is the fallback when
 // the query is absent (may be "" — then the first board in the db is shown and the
-// SPA picker switches among all of them).
+// SPA picker switches among all of them). The server reads no files: all content a
+// renderer needs (including doc content) is in the snapshot, supplied by the agent.
 type Server struct {
 	st          *store.Store
 	defaultPlan string
-	repoRoot    string // base dir for resolving spec/plan ref paths (docket repo); may be ""
 }
 
 func NewServer(st *store.Store, defaultPlanID string) *Server {
@@ -51,13 +49,6 @@ func (s *Server) board(r *http.Request) string {
 		return boards[0].ID
 	}
 	return ""
-}
-
-// WithRepoRoot sets the base directory used to resolve an item's spec_ref/plan
-// path to file content in the detail endpoint.
-func (s *Server) WithRepoRoot(root string) *Server {
-	s.repoRoot = root
-	return s
 }
 
 // Handler returns the HTTP handler. Routes:
@@ -108,41 +99,20 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, snap)
 }
 
-// handleItem returns the full detail for one card, including rendered spec/plan
-// content (resolved under repoRoot) and bidirectional dependency refs.
+// handleItem returns the full detail for one card: the item (with its content) and
+// its bidirectional dependency refs. No filesystem access — content is on the item.
 func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/item/")
 	if id == "" {
 		http.Error(w, "missing item id", http.StatusBadRequest)
 		return
 	}
-	detail, err := s.st.ItemDetail(r.Context(), s.board(r), id, s.readRef)
+	detail, err := s.st.ItemDetail(r.Context(), s.board(r), id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
 	writeJSON(w, detail)
-}
-
-// readRef resolves a stored spec/plan ref path to file content under repoRoot.
-// It refuses paths escaping the root and caps size. Returns "" on any failure.
-func (s *Server) readRef(ref string) string {
-	if s.repoRoot == "" || ref == "" {
-		return ""
-	}
-	clean := filepath.Clean("/" + ref) // strip leading .. traversal
-	full := filepath.Join(s.repoRoot, clean)
-	if !strings.HasPrefix(full, filepath.Clean(s.repoRoot)) {
-		return ""
-	}
-	b, err := os.ReadFile(full)
-	if err != nil {
-		return ""
-	}
-	if len(b) > 256*1024 {
-		b = b[:256*1024]
-	}
-	return string(b)
 }
 
 // handleStream is a Server-Sent Events endpoint that pushes a fresh board

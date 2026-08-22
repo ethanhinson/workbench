@@ -368,3 +368,46 @@ func TestSameNameAcrossProjects(t *testing.T) {
 		t.Fatalf("CreatePlan by existing (project,name) should select, got %s", again.ID)
 	}
 }
+
+// TestPlanLayoutRoundTrip proves a board has no layout until set, that a valid
+// layout round-trips, that an invalid one is rejected, and a missing board errors.
+func TestPlanLayoutRoundTrip(t *testing.T) {
+	st, p := newTestStore(t)
+	ctx := context.Background()
+
+	// No layout initially.
+	if _, ok, err := st.GetPlanLayout(ctx, p.ID); err != nil || ok {
+		t.Fatalf("fresh board should have no layout (ok=%v err=%v)", ok, err)
+	}
+
+	lo := board.Layout{
+		Nav: []board.NavItem{{ID: "done", Label: "Done", View: "done"}},
+		Views: map[string]board.LayoutView{
+			"done": {Type: board.ViewList},
+		},
+	}
+	if err := st.SetPlanLayout(ctx, p.ID, lo); err != nil {
+		t.Fatalf("set layout: %v", err)
+	}
+	got, ok, err := st.GetPlanLayout(ctx, p.ID)
+	if err != nil || !ok {
+		t.Fatalf("layout should be set now (ok=%v err=%v)", ok, err)
+	}
+	if len(got.Nav) != 1 || got.Nav[0].ID != "done" || got.Views["done"].Type != board.ViewList {
+		t.Fatalf("layout did not round-trip: %+v", got)
+	}
+
+	// Invalid layout (nav points at a missing view) is rejected, leaving the old one.
+	bad := board.Layout{Nav: []board.NavItem{{ID: "x", Label: "X", View: "ghost"}}, Views: map[string]board.LayoutView{}}
+	if err := st.SetPlanLayout(ctx, p.ID, bad); err == nil {
+		t.Fatal("invalid layout should be rejected")
+	}
+	if got2, _, _ := st.GetPlanLayout(ctx, p.ID); got2.Nav[0].ID != "done" {
+		t.Fatal("rejected layout should not overwrite the good one")
+	}
+
+	// Missing board errors.
+	if err := st.SetPlanLayout(ctx, "nope", lo); err == nil {
+		t.Fatal("setting layout on a missing board should error")
+	}
+}

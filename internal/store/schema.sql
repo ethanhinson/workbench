@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS plan (
     profile     TEXT NOT NULL DEFAULT 'sdd', -- active methodology profile (sdd|scrum|kanban|custom)
     lane_dim    TEXT NOT NULL DEFAULT 'agent', -- what a swim lane means under this profile
     policies    TEXT NOT NULL DEFAULT '{}',  -- JSON-encoded board.Policies (the enforcement rules)
+    layout      TEXT NOT NULL DEFAULT '',    -- JSON-encoded board.Layout (agent-authored UI); '' = no layout
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL,
     UNIQUE (project, name)              -- board names are unique WITHIN a project
@@ -54,7 +55,8 @@ CREATE TABLE IF NOT EXISTS item (
     parent_id   TEXT REFERENCES item(id) ON DELETE CASCADE,
     kind        TEXT NOT NULL,              -- epic | story | task | bug | spike
     title       TEXT NOT NULL,
-    body        TEXT NOT NULL DEFAULT '',
+    body        TEXT NOT NULL DEFAULT '',   -- short free-text notes
+    content     TEXT NOT NULL DEFAULT '',   -- full doc markdown (spec/ADR/notes) the agent supplied; rendered by a doc view
     column_key  TEXT NOT NULL,              -- current stage
     lane_key    TEXT,                       -- owning swim lane (nullable = unassigned)
     spec_ref    TEXT NOT NULL DEFAULT '',   -- path/URL to the spec doc (SDD)

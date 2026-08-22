@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/ethanhinson/kanban-mcp/internal/board"
-	"github.com/ethanhinson/kanban-mcp/internal/source"
 	"github.com/ethanhinson/kanban-mcp/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -109,6 +108,21 @@ func (s *Server) register(srv *mcp.Server) {
 	}, s.boardSetProject)
 
 	mcp.AddTool(srv, &mcp.Tool{
+		Name: "board_set_layout",
+		Description: "Define how a board renders: its nav tabs and views. A board has NO layout until this " +
+			"is set (it renders empty). Pass a layout object: nav[] (tabs, each opening a view) + views{} " +
+			"(each with type list|lanes|board|doc; lanes/columns for lanes|board). Items appear where their " +
+			"view:/lane:/column: labels place them. Idempotent — replaces the layout. This is how a " +
+			"methodology skill shapes a tool-idiomatic board.",
+	}, s.boardSetLayout)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "board_get_layout",
+		Description: "Return a board's current layout (nav + views), or empty if none is set. Use to read " +
+			"and tweak an existing layout rather than reauthoring it.",
+	}, s.boardGetLayout)
+
+	mcp.AddTool(srv, &mcp.Tool{
 		Name: "board_view",
 		Description: "Render one board (identified by board_id) as columns x swim lanes: the single pane of " +
 			"glass. Use to see current state before planning or moving work.",
@@ -122,11 +136,25 @@ func (s *Server) register(srv *mcp.Server) {
 	}, s.itemCreate)
 
 	mcp.AddTool(srv, &mcp.Tool{
+		Name: "item_upsert",
+		Description: "Create-or-update a card keyed by (board_id, ext_key) — the hydration primitive for " +
+			"methodology skills. Re-running with the same ext_key UPDATES in place (never duplicates). Carry " +
+			"content (the full doc markdown a doc view renders) and placement labels (view:<v>, lane:<l>, " +
+			"column:<c>). Use as you work: whenever you touch a source artifact, upsert its card so the board " +
+			"stays live. ext_key is a stable source id like 'openspec:auth' or 'docket:74'.",
+	}, s.itemUpsert)
+
+	mcp.AddTool(srv, &mcp.Tool{
 		Name: "item_link",
 		Description: "Link two items on the same board with a first-class dependency: kind is " +
 			"depends_on|related|discovered_from. Direction: from_id depends_on/relates_to/was_discovered_from " +
 			"to_id. This is how the board expresses relationships — flat, not nested.",
 	}, s.itemLink)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "item_set_content",
+		Description: "Replace an item's content (the full doc markdown a doc view renders). Use to refresh a card's document as you edit the underlying file.",
+	}, s.itemSetContent)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "item_move",
@@ -172,14 +200,6 @@ func (s *Server) register(srv *mcp.Server) {
 			"custom visualization on demand, or to any external renderer.",
 	}, s.boardExport)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name: "source_sync",
-		Description: "Sync an external source (currently 'docket') into a board (board_id required), " +
-			"idempotently. Reads read-only backlog/done/ADR data from the source and projects it onto the " +
-			"board as cards keyed by external id; re-running updates in place. The board process owns your " +
-			"live in-flight work; sources are decoupled inputs. For docket, pass docs_dir " +
-			"(e.g. <repo>/.docket/docs). Works with any harness because docket stores work as markdown on a branch.",
-	}, s.sourceSync)
 }
 
 // ---- tool I/O types ----
@@ -292,6 +312,50 @@ func (s *Server) boardSetProject(ctx context.Context, _ *mcp.CallToolRequest, in
 	return nil, itemOut{ID: plan.ID, Message: fmt.Sprintf("moved %q to project %q", plan.Name, in.Project)}, nil
 }
 
+type boardSetLayoutIn struct {
+	BoardID string       `json:"board_id" jsonschema:"the board to lay out"`
+	Layout  board.Layout `json:"layout" jsonschema:"the layout: nav[] tabs + views{} (each type list|lanes|board|doc)"`
+}
+
+func (s *Server) boardSetLayout(ctx context.Context, _ *mcp.CallToolRequest, in boardSetLayoutIn) (*mcp.CallToolResult, itemOut, error) {
+	plan, err := s.resolveBoard(ctx, in.BoardID)
+	if err != nil {
+		return nil, itemOut{}, err
+	}
+	if err := s.st.SetPlanLayout(ctx, plan.ID, in.Layout); err != nil {
+		return nil, itemOut{}, err
+	}
+	return nil, itemOut{ID: plan.ID, Message: fmt.Sprintf("layout set: %d nav tabs, %d views", len(in.Layout.Nav), len(in.Layout.Views))}, nil
+}
+
+type boardGetLayoutIn struct {
+	BoardID string `json:"board_id" jsonschema:"the board whose layout to read"`
+}
+
+type boardGetLayoutOut struct {
+	HasLayout bool         `json:"has_layout"`
+	Layout    board.Layout `json:"layout"`
+}
+
+func (s *Server) boardGetLayout(ctx context.Context, _ *mcp.CallToolRequest, in boardGetLayoutIn) (*mcp.CallToolResult, boardGetLayoutOut, error) {
+	plan, err := s.resolveBoard(ctx, in.BoardID)
+	if err != nil {
+		return nil, boardGetLayoutOut{}, err
+	}
+	lo, ok, err := s.st.GetPlanLayout(ctx, plan.ID)
+	if err != nil {
+		return nil, boardGetLayoutOut{}, err
+	}
+	// Keep maps/slices non-nil so the JSON output is object/array, not null.
+	if lo.Views == nil {
+		lo.Views = map[string]board.LayoutView{}
+	}
+	if lo.Nav == nil {
+		lo.Nav = []board.NavItem{}
+	}
+	return nil, boardGetLayoutOut{HasLayout: ok, Layout: lo}, nil
+}
+
 type boardViewIn struct {
 	BoardID string `json:"board_id" jsonschema:"the board to view (from board_start / board_list)"`
 	LaneKey string `json:"lane_key,omitempty" jsonschema:"restrict the view to a single swim lane"`
@@ -365,12 +429,13 @@ type itemCreateIn struct {
 	Kind     string   `json:"kind" jsonschema:"one of epic|story|task|bug|spike"`
 	Title    string   `json:"title"`
 	Body     string   `json:"body,omitempty"`
+	Content  string   `json:"content,omitempty" jsonschema:"full doc markdown a doc view renders (e.g. a spec/ADR body)"`
 	ParentID string   `json:"parent_id,omitempty" jsonschema:"id of the containing epic/story to nest under"`
 	Column   string   `json:"column,omitempty" jsonschema:"workflow column key; defaults to backlog"`
 	Lane     string   `json:"lane,omitempty" jsonschema:"swim lane key; defaults to the calling agent's lane"`
 	Priority string   `json:"priority,omitempty" jsonschema:"p0|p1|p2|p3; defaults to p2"`
 	SpecRef  string   `json:"spec_ref,omitempty"`
-	Labels   []string `json:"labels,omitempty" jsonschema:"namespaced labels as ns:value strings"`
+	Labels   []string `json:"labels,omitempty" jsonschema:"namespaced labels as ns:value strings (incl. view:/lane:/column:)"`
 }
 
 type itemOut struct {
@@ -397,6 +462,7 @@ func (s *Server) itemCreate(ctx context.Context, _ *mcp.CallToolRequest, in item
 		Kind:      board.Kind(in.Kind),
 		Title:     in.Title,
 		Body:      in.Body,
+		Content:   in.Content,
 		ColumnKey: in.Column,
 		LaneKey:   lane,
 		Priority:  in.Priority,
@@ -408,6 +474,72 @@ func (s *Server) itemCreate(ctx context.Context, _ *mcp.CallToolRequest, in item
 		return nil, itemOut{}, err
 	}
 	return nil, itemOut{ID: created.ID, Message: fmt.Sprintf("created %s %q", created.Kind, created.Title)}, nil
+}
+
+type itemUpsertIn struct {
+	BoardID  string   `json:"board_id" jsonschema:"the board to upsert onto"`
+	ExtKey   string   `json:"ext_key" jsonschema:"stable source id, e.g. 'openspec:auth' or 'docket:74' — the upsert key"`
+	Title    string   `json:"title"`
+	Kind     string   `json:"kind,omitempty" jsonschema:"epic|story|task|bug|spike; defaults to task"`
+	Body     string   `json:"body,omitempty"`
+	Content  string   `json:"content,omitempty" jsonschema:"full doc markdown a doc view renders"`
+	Column   string   `json:"column,omitempty" jsonschema:"workflow column key; defaults to backlog"`
+	Lane     string   `json:"lane,omitempty"`
+	Priority string   `json:"priority,omitempty"`
+	SpecRef  string   `json:"spec_ref,omitempty"`
+	Labels   []string `json:"labels,omitempty" jsonschema:"namespaced labels incl. view:/lane:/column: for placement"`
+}
+
+func (s *Server) itemUpsert(ctx context.Context, _ *mcp.CallToolRequest, in itemUpsertIn) (*mcp.CallToolResult, itemOut, error) {
+	plan, err := s.resolveBoard(ctx, in.BoardID)
+	if err != nil {
+		return nil, itemOut{}, err
+	}
+	if in.ExtKey == "" {
+		return nil, itemOut{}, fmt.Errorf("ext_key is required for upsert")
+	}
+	labels, err := parseLabels(in.Labels)
+	if err != nil {
+		return nil, itemOut{}, err
+	}
+	kind := board.Kind(in.Kind)
+	if kind == "" {
+		kind = board.KindTask
+	}
+	lane := in.Lane
+	if lane == "" {
+		lane = s.defaultLane(plan)
+	}
+	it := &board.Item{
+		PlanID:   plan.ID,
+		Kind:     kind,
+		Title:    in.Title,
+		Body:     in.Body,
+		Content:  in.Content,
+		ColumnKey: in.Column,
+		LaneKey:  lane,
+		Priority: in.Priority,
+		SpecRef:  in.SpecRef,
+		ExtKey:   in.ExtKey,
+		Labels:   labels,
+	}
+	saved, err := s.st.UpsertByExtKey(ctx, s.agentID, it)
+	if err != nil {
+		return nil, itemOut{}, err
+	}
+	return nil, itemOut{ID: saved.ID, Message: fmt.Sprintf("upserted %s", in.ExtKey)}, nil
+}
+
+type itemSetContentIn struct {
+	ItemID  string `json:"item_id"`
+	Content string `json:"content" jsonschema:"the full doc markdown to store on the item"`
+}
+
+func (s *Server) itemSetContent(ctx context.Context, _ *mcp.CallToolRequest, in itemSetContentIn) (*mcp.CallToolResult, itemOut, error) {
+	if err := s.st.SetContent(ctx, s.agentID, in.ItemID, in.Content); err != nil {
+		return nil, itemOut{}, err
+	}
+	return nil, itemOut{ID: in.ItemID, Message: fmt.Sprintf("content set (%d bytes)", len(in.Content))}, nil
 }
 
 type itemLinkIn struct {
@@ -575,42 +707,6 @@ func (s *Server) boardExport(ctx context.Context, _ *mcp.CallToolRequest, in boa
 		return nil, board.Snapshot{}, err
 	}
 	return nil, snap, nil
-}
-
-type sourceSyncIn struct {
-	BoardID string `json:"board_id" jsonschema:"the board to project the source onto"`
-	Source  string `json:"source,omitempty" jsonschema:"external source kind; defaults to docket"`
-	DocsDir string `json:"docs_dir" jsonschema:"for docket: path to the docs dir, e.g. /path/to/repo/.docket/docs"`
-}
-
-type sourceSyncOut struct {
-	Source  string `json:"source"`
-	Items   int    `json:"items"`
-	Links   int    `json:"links"`
-	Message string `json:"message"`
-}
-
-func (s *Server) sourceSync(ctx context.Context, _ *mcp.CallToolRequest, in sourceSyncIn) (*mcp.CallToolResult, sourceSyncOut, error) {
-	plan, err := s.resolveBoard(ctx, in.BoardID)
-	if err != nil {
-		return nil, sourceSyncOut{}, err
-	}
-	kind := in.Source
-	if kind == "" {
-		kind = "docket"
-	}
-	provider, err := source.NewProvider(kind, source.Config{DocsDir: in.DocsDir})
-	if err != nil {
-		return nil, sourceSyncOut{}, err
-	}
-	res, err := source.Sync(ctx, s.st, plan.ID, provider)
-	if err != nil {
-		return nil, sourceSyncOut{}, err
-	}
-	return nil, sourceSyncOut{
-		Source: kind, Items: res.Items, Links: res.Links,
-		Message: fmt.Sprintf("synced %d %s items (%d links) onto board %q", res.Items, kind, res.Links, plan.Name),
-	}, nil
 }
 
 // defaultLane picks the lane an item lands in when none is given, based on the

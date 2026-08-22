@@ -31,7 +31,7 @@ func TestItemDetailWithLinksNoDeadlock(t *testing.T) {
 	done := make(chan struct{})
 	var detail board.ItemDetail
 	go func() {
-		detail, err = st.ItemDetail(ctx, p.ID, b.ID, nil)
+		detail, err = st.ItemDetail(ctx, p.ID, b.ID)
 		close(done)
 	}()
 	select {

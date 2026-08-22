@@ -106,6 +106,16 @@
              border-bottom:1px solid var(--line); }
   .doneRow:last-child { border-bottom:none; }
   .doneRow:hover { background:var(--panel2); }
+  /* doc view: index list on the left, rendered document on the right */
+  .docview { flex:1 1 auto; min-height:0; display:flex; gap:12px; }
+  .doc-list { flex:0 0 260px; overflow-y:auto; border:1px solid var(--line); border-radius:10px; }
+  .doc-item { padding:9px 12px; cursor:pointer; border-bottom:1px solid var(--line); font-size:13px;
+              white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .doc-item:hover { background:var(--panel2); }
+  .doc-item.active { background:#12161e; border-left:2px solid #2f81f7; }
+  .doc-body { flex:1 1 auto; min-width:0; overflow-y:auto; }
+  .doc-body .md { max-height:none; }
+  .doc-ref { margin-top:10px; font-size:11px; color:var(--muted); }
   .dr-id { color:var(--accent); font-weight:600; font-size:13px; flex:0 0 52px; }
   .dr-title { flex:1 1 auto; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .dr-meta { display:flex; align-items:center; gap:6px; flex:0 0 auto; }
@@ -176,9 +186,9 @@
 <script>
 const $ = (s)=>document.querySelector(s);
 let SNAP = null;
-let TAB = "inflight";       // backlog | inflight | done
+let NAV = null;             // active nav item id (which view is shown)
 const params = new URLSearchParams(location.search);
-if (params.get("tab")) TAB = params.get("tab");
+if (params.get("nav")) NAV = params.get("nav");
 // BOARD selects which board (of many in the db) to view; empty => server default.
 let BOARD = params.get("board") || "";
 // boardQ appends the selected board to an API URL so every fetch is board-scoped.
@@ -186,8 +196,15 @@ function boardQ(path){ return BOARD ? path+(path.includes("?")?"&":"?")+"board="
 
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 function itemById(id){ return (SNAP.items||[]).find(i=>i.id===id); }
-function viewDef(kind){ return (SNAP.views||[]).find(v=>v.kind===kind); }
-function specBadge(s){ return `<span class="badge spec-${s}">spec:${s}</span>`; }
+function specBadge(s){ return s ? `<span class="badge spec-${s}">spec:${s}</span>` : ""; }
+
+// ---- layout-driven placement: items carry view:/lane:/column: labels ----
+function labelVal(it, ns){ const l=(it.labels||[]).find(x=>x.ns===ns); return l?l.value:""; }
+// itemsForView returns the items whose view: label matches the view's include (default = the view id).
+function itemsForView(navId, viewDef){
+  const want = (viewDef.include && viewDef.include.view) ? viewDef.include.view : navId;
+  return (SNAP.items||[]).filter(i=>labelVal(i,"view")===want);
+}
 
 // dependency chips for a card (outgoing depends_on only, compact)
 function depChips(it){
@@ -203,99 +220,144 @@ function shortRef(it){
   const m = /^#(\d+)/.exec(it.title); return m ? "#"+m[1] : it.title.slice(0,10);
 }
 
-// card renders one ticket. colName is the second-axis value for this view
-// (priority in Backlog, progress in In-Flight) shown as a status badge.
-function card(it, colName){
+// card renders one ticket; colLabel (if any) is shown as a status badge.
+function card(it, colLabel){
   const badges = [
-    (typeof colName==="string" && colName) ? `<span class="badge stage">${esc(colName)}</span>` : `<span class="badge">${esc(it.priority)}</span>`,
+    colLabel ? `<span class="badge stage">${esc(colLabel)}</span>` : (it.priority?`<span class="badge">${esc(it.priority)}</span>`:""),
     specBadge(it.spec_status),
     it.blocked ? `<span class="badge blocked">blocked</span>` : "",
     depChips(it),
   ].join("");
-  return `<div class="card ${it.priority} ${it.blocked?'blocked':''}" onclick="openDrawer('${it.id}')">
-    <div class="kind">${it.kind}</div>
+  return `<div class="card ${it.priority||''} ${it.blocked?'blocked':''}" onclick="openDrawer('${it.id}')">
+    <div class="kind">${esc(it.kind)}</div>
     <div class="title">${esc(it.title)}</div>
     <div class="badges">${badges}</div>
   </div>`;
 }
 
-// renderGrid draws lanes as VERTICAL columns (classic kanban): each swim lane is
-// a column, tickets stack in it. The old second axis (priority/progress) becomes
-// a badge on the card and the within-lane sort key.
-function renderGrid(kind){
-  const vd = viewDef(kind);
-  const items = (SNAP.items||[]).filter(i=>i.views && i.views[kind]);
-  const colName = {}; // column key -> display name (for the per-card badge)
-  vd.columns.forEach((c,i)=>{ colName[c.key] = c.name; c._ord = i; });
-  const colOrd = {}; vd.columns.forEach((c,i)=>colOrd[c.key]=i);
+// ---- view renderers, chosen by view.type ----
 
-  // group items by lane
+// LANES: columns × swimlanes grid. Items bucket by their lane:/column: labels.
+// Rendered as vertical swim lanes (each lane a column, cards stacked; the item's
+// column: label becomes a per-card status badge + within-lane sort key).
+function renderLanes(navId, vd){
+  const items = itemsForView(navId, vd);
+  const colLabel = {}, colOrd = {};
+  (vd.columns||[]).forEach((c,i)=>{ colLabel[c.key]=c.label; colOrd[c.key]=i; });
   const byLane = {};
-  for (const it of items){ const p=it.views[kind]; (byLane[p.lane] ||= []).push(it); }
-  // sort within a lane by the second axis (progress/priority order), then title
-  for (const k in byLane){
-    byLane[k].sort((a,b)=>{
-      const oa=colOrd[a.views[kind].column]??9, ob=colOrd[b.views[kind].column]??9;
-      return oa-ob || a.title.localeCompare(b.title);
-    });
-  }
+  for (const it of items){ const k = labelVal(it,"lane") || "_unassigned"; (byLane[k] ||= []).push(it); }
+  for (const k in byLane) byLane[k].sort((a,b)=>(colOrd[labelVal(a,"column")]??9)-(colOrd[labelVal(b,"column")]??9) || a.title.localeCompare(b.title));
 
+  const lanes = [...(vd.lanes||[])];
+  if (byLane["_unassigned"]) lanes.push({key:"_unassigned", label:"(unassigned)"});
   let html = `<div class="lanes">`;
-  for (const lane of vd.lanes){
+  for (const lane of lanes){
     const list = byLane[lane.key]||[];
     html += `<div class="laneCol">
-      <div class="laneHead">${esc(lane.name)}<span class="count">${list.length}</span></div>
-      <div class="laneBody">${
-        list.length ? list.map(it=>card(it, colName[it.views[kind].column])).join("")
-                    : '<div class="empty">—</div>'
-      }</div>
+      <div class="laneHead">${esc(lane.label)}<span class="count">${list.length}</span></div>
+      <div class="laneBody">${ list.length ? list.map(it=>card(it, colLabel[labelVal(it,"column")])).join("") : '<div class="empty">—</div>' }</div>
     </div>`;
   }
-  html += `</div>`;
-  return html;
+  return html + `</div>`;
 }
 
-function renderDone(){
-  const items = (SNAP.items||[]).filter(i=>i.views && i.views.done);
-  if (!items.length) return `<div class="empty">nothing closed yet</div>`;
-  // Sort by id desc (newest first) — extract the leading #N when present.
+// BOARD: vertical swimlanes only (no column axis).
+function renderBoard(navId, vd){
+  const items = itemsForView(navId, vd);
+  const byLane = {};
+  for (const it of items){ const k = labelVal(it,"lane") || "_unassigned"; (byLane[k] ||= []).push(it); }
+  const lanes = [...(vd.lanes||[])];
+  if (byLane["_unassigned"]) lanes.push({key:"_unassigned", label:"(unassigned)"});
+  let html = `<div class="lanes">`;
+  for (const lane of lanes){
+    const list = (byLane[lane.key]||[]).sort((a,b)=>a.title.localeCompare(b.title));
+    html += `<div class="laneCol">
+      <div class="laneHead">${esc(lane.label)}<span class="count">${list.length}</span></div>
+      <div class="laneBody">${ list.length ? list.map(it=>card(it, "")).join("") : '<div class="empty">—</div>' }</div>
+    </div>`;
+  }
+  return html + `</div>`;
+}
+
+// LIST: a flat clickable list of items.
+function renderList(navId, vd){
+  const items = itemsForView(navId, vd);
+  if (!items.length) return `<div class="empty">nothing here</div>`;
   const num = it => { const m=/^#(\d+)/.exec(it.title); return m?+m[1]:0; };
-  const sorted = [...items].sort((a,b)=>num(b)-num(a));
-  return `<div class="donelist">${sorted.map(doneRow).join("")}</div>`;
+  const sorted = [...items].sort((a,b)=>num(b)-num(a) || a.title.localeCompare(b.title));
+  return `<div class="donelist">${sorted.map(listRow).join("")}</div>`;
 }
-
-// doneRow renders one closed ticket as a compact clickable list row.
-function doneRow(it){
+function listRow(it){
   const m = /^#(\d+)\s*(.*)/.exec(it.title);
   const id = m ? "#"+m[1] : "";
   const title = m ? m[2] : it.title;
-  const col = it.column_key;
   return `<div class="doneRow" onclick="openDrawer('${it.id}')">
     <span class="dr-id">${esc(id)}</span>
     <span class="dr-title">${esc(title)}</span>
     <span class="dr-meta">
-      <span class="badge ${it.kind==='bug'?'':''}">${esc(it.kind)}</span>
+      <span class="badge">${esc(it.kind)}</span>
       ${specBadge(it.spec_status)}
-      <span class="badge dr-col ${col}">${esc(col)}</span>
+      ${it.column_key?`<span class="badge dr-col ${it.column_key}">${esc(it.column_key)}</span>`:""}
     </span>
   </div>`;
+}
+
+// DOC: a document reader — a list of the view's items on the left, the selected
+// item's rendered content on the right.
+let DOC_SEL = null;
+function renderDoc(navId, vd){
+  const items = itemsForView(navId, vd);
+  if (!items.length) return `<div class="empty">no documents here</div>`;
+  const sel = items.find(i=>i.id===DOC_SEL) || items[0];
+  DOC_SEL = sel.id;
+  const list = items.map(it=>
+    `<div class="doc-item ${it.id===sel.id?'active':''}" onclick="selectDoc('${it.id}')">${esc(it.title)}</div>`).join("");
+  const h = `<div class="docview">
+    <div class="doc-list">${list}</div>
+    <div class="doc-body"><div class="md" id="doc-md"></div>${sel.spec_ref?`<div class="doc-ref">${esc(sel.spec_ref)}</div>`:""}</div>
+  </div>`;
+  // Render markdown after the element exists.
+  setTimeout(()=>{ const el=$("#doc-md"); if(el) renderMarkdown(el, sel.content || "*(no content — the agent hasn't hydrated this doc yet)*"); }, 0);
+  return h;
+}
+function selectDoc(id){ DOC_SEL = id; render(); }
+
+function activeNav(){
+  const nav = (SNAP.layout && SNAP.layout.nav) || [];
+  return nav.find(n=>n.id===NAV) || nav[0] || null;
 }
 
 function render(){
   if (!SNAP){ return; }
   $("#plan-tag").textContent = SNAP.plan.name;
-  // tabs with counts
-  const counts = {backlog:0,inflight:0,done:0};
-  for (const it of SNAP.items||[]) for (const k of Object.keys(it.views||{})) counts[k]++;
-  const tabDefs = [["inflight","In-Flight"],["backlog","Backlog"],["done","Done"]];
-  $("#tabs").innerHTML = tabDefs.map(([k,n])=>
-    `<div class="tab ${TAB===k?'active':''}" onclick="setTab('${k}')">${n}<span class="count">${counts[k]}</span></div>`).join("");
+
+  if (!SNAP.has_layout){
+    $("#tabs").innerHTML = "";
+    $("#stats").innerHTML = "";
+    $("#board").innerHTML = `<div class="empty" style="margin:auto;text-align:center;max-width:34ch">
+      <div style="font-size:15px;color:#c9d1d9">No layout set</div>
+      <div style="margin-top:8px">Run a methodology skill (docket / openspec / superpowers) or call <code>board_set_layout</code> to shape this board.</div>
+    </div>`;
+    return;
+  }
+
+  const nav = SNAP.layout.nav || [];
+  const cur = activeNav();
+  // nav strip with per-view counts
+  $("#tabs").innerHTML = nav.map(n=>{
+    const vd = SNAP.layout.views[n.view] || {};
+    const cnt = itemsForView(n.id, vd).length;
+    return `<div class="tab ${cur&&cur.id===n.id?'active':''}" onclick="setNav('${esc(n.id)}')">${esc(n.label)}<span class="count">${cnt}</span></div>`;
+  }).join("");
   $("#stats").innerHTML = `<span>${SNAP.stats.total_items} total</span><span>${SNAP.stats.blocked} blocked</span>`;
 
-  $("#board").innerHTML = TAB==="done" ? renderDone() : renderGrid(TAB);
+  if (!cur){ $("#board").innerHTML = `<div class="empty">layout has no views</div>`; return; }
+  const vd = SNAP.layout.views[cur.view] || {type:"list"};
+  const R = {lanes:renderLanes, board:renderBoard, list:renderList, doc:renderDoc}[vd.type] || renderList;
+  $("#board").innerHTML = R(cur.id, vd);
 }
 
-function setTab(k){ TAB=k; const u=new URL(location); u.searchParams.set("tab",k); history.replaceState({},"",u); render(); }
+function setNav(id){ NAV=id; DOC_SEL=null; const u=new URL(location); u.searchParams.set("nav",id); history.replaceState({},"",u); render(); }
 
 // ---- detail drawer ----
 async function openDrawer(id){
@@ -326,15 +388,18 @@ function renderDrawer(d){
   if (d.depended_by&&d.depended_by.length){ h+=`<div class="section-h">Blocks / depended on by</div><div class="deplist">${d.depended_by.map(refRow).join("")}</div>`; }
   if (d.related&&d.related.length){ h+=`<div class="section-h">Related</div><div class="deplist">${d.related.map(refRow).join("")}</div>`; }
 
-  if (it.spec_ref) h += `<div class="section-h">Spec — ${esc(it.spec_ref)}</div>`;
-  if (d.spec_content) h += `<div class="md" id="spec-md"></div>`;
-  else if (it.spec_ref) h += `<div class="empty">spec file not found under repo root (pass --repo-root)</div>`;
+  // Document content the agent hydrated onto the item (rendered markdown/mermaid).
+  if (it.content){
+    h += `<div class="section-h">Document${it.spec_ref?' — '+esc(it.spec_ref):''}</div><div class="md" id="content-md"></div>`;
+  } else if (it.spec_ref){
+    h += `<div class="section-h">Spec</div><div class="tag">${esc(it.spec_ref)}</div>`;
+  }
   if (it.body) h += `<div class="section-h">Notes</div><div class="md" id="body-md"></div>`;
   h += `<div class="section-h">id</div><div class="tag">${it.id}${it.ext_key?' · '+it.ext_key:''}</div>`;
   $("#drawer-body").innerHTML = h;
 
   // Render markdown (with mermaid) into the placeholders after insertion.
-  if (d.spec_content) renderMarkdown($("#spec-md"), d.spec_content);
+  if (it.content) renderMarkdown($("#content-md"), it.content);
   if (it.body) renderMarkdown($("#body-md"), it.body);
 }
 

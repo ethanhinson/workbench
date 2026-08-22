@@ -291,6 +291,49 @@ func (s *Store) SetPlanProject(ctx context.Context, planID, newProject string) e
 	return nil
 }
 
+// SetPlanLayout stores a board's agent-authored layout (validated JSON). It fully
+// replaces any prior layout. Returns an error if the board doesn't exist.
+func (s *Store) SetPlanLayout(ctx context.Context, planID string, lo board.Layout) error {
+	if err := lo.Validate(); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(lo)
+	if err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE plan SET layout=?, updated_at=? WHERE id=?`, string(raw), now(), planID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("board %q not found", planID)
+	}
+	s.broker.notify() // live UI re-renders under the new layout
+	return nil
+}
+
+// GetPlanLayout returns a board's layout and whether one is set. ok is false (and
+// the Layout zero-valued) when the board has no layout yet.
+func (s *Store) GetPlanLayout(ctx context.Context, planID string) (board.Layout, bool, error) {
+	var raw string
+	err := s.db.QueryRowContext(ctx, `SELECT layout FROM plan WHERE id=?`, planID).Scan(&raw)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return board.Layout{}, false, fmt.Errorf("board %q not found", planID)
+		}
+		return board.Layout{}, false, err
+	}
+	if raw == "" {
+		return board.Layout{}, false, nil
+	}
+	var lo board.Layout
+	if err := json.Unmarshal([]byte(raw), &lo); err != nil {
+		return board.Layout{}, false, fmt.Errorf("decode layout: %w", err)
+	}
+	return lo, true, nil
+}
+
 // LoadPlan returns the single plan row with all fields populated.
 func (s *Store) LoadPlan(ctx context.Context, planID string) (*board.Plan, error) {
 	var p board.Plan
@@ -326,13 +369,17 @@ func (s *Store) Snapshot(ctx context.Context, planID string) (board.Snapshot, er
 	if err != nil {
 		return board.Snapshot{}, err
 	}
-	return board.BuildSnapshot(*plan, cols, lanes, items, links), nil
+	layout, hasLayout, err := s.GetPlanLayout(ctx, planID)
+	if err != nil {
+		return board.Snapshot{}, err
+	}
+	return board.BuildSnapshot(*plan, layout, hasLayout, cols, lanes, items, links), nil
 }
 
-// ItemDetail assembles the full click-through detail for one item: the item,
-// its bidirectional dependency refs, and (via readFile) its spec/plan content.
-// readFile may be nil (content omitted) — it resolves a stored ref path to bytes.
-func (s *Store) ItemDetail(ctx context.Context, planID, itemID string, readFile func(ref string) string) (board.ItemDetail, error) {
+// ItemDetail assembles the full click-through detail for one item: the item (with
+// its content) and its bidirectional dependency refs. Content is whatever the agent
+// stored on the item — the server never reads the filesystem.
+func (s *Store) ItemDetail(ctx context.Context, planID, itemID string) (board.ItemDetail, error) {
 	it, err := s.getItem(ctx, itemID)
 	if err != nil {
 		return board.ItemDetail{}, err
@@ -343,12 +390,6 @@ func (s *Store) ItemDetail(ctx context.Context, planID, itemID string, readFile 
 	}
 	it.Labels = labels
 	d := board.ItemDetail{Item: *it}
-
-	if readFile != nil {
-		if it.SpecRef != "" {
-			d.SpecContent = readFile(it.SpecRef)
-		}
-	}
 
 	// refFor resolves an item id to a lightweight ref. Called AFTER all cursors are
 	// closed — the pool is MaxOpenConns(1), so querying while a rows cursor is open
@@ -596,9 +637,9 @@ func (s *Store) CreateItem(ctx context.Context, agentID string, it *board.Item) 
 		lane = it.LaneKey
 	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO item(id,plan_id,parent_id,kind,title,body,column_key,lane_key,spec_ref,spec_status,priority,blocked,blocked_reason,position,created_at,updated_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		it.ID, it.PlanID, parent, it.Kind, it.Title, it.Body, it.ColumnKey, lane,
+		`INSERT INTO item(id,plan_id,parent_id,kind,title,body,content,column_key,lane_key,spec_ref,spec_status,priority,blocked,blocked_reason,position,created_at,updated_at)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		it.ID, it.PlanID, parent, it.Kind, it.Title, it.Body, it.Content, it.ColumnKey, lane,
 		it.SpecRef, it.SpecStatus, it.Priority, boolInt(it.Blocked), it.BlockedReason,
 		it.Position, it.CreatedAt, it.UpdatedAt); err != nil {
 		return nil, err
@@ -656,9 +697,9 @@ func (s *Store) UpsertByExtKey(ctx context.Context, agentID string, it *board.It
 		it.ID = newID()
 		it.CreatedAt, it.UpdatedAt = ts, ts
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO item(id,plan_id,parent_id,kind,title,body,column_key,lane_key,spec_ref,spec_status,priority,blocked,blocked_reason,position,ext_key,created_at,updated_at)
-			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			it.ID, it.PlanID, parent, it.Kind, it.Title, it.Body, it.ColumnKey, lane,
+			`INSERT INTO item(id,plan_id,parent_id,kind,title,body,content,column_key,lane_key,spec_ref,spec_status,priority,blocked,blocked_reason,position,ext_key,created_at,updated_at)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			it.ID, it.PlanID, parent, it.Kind, it.Title, it.Body, it.Content, it.ColumnKey, lane,
 			it.SpecRef, it.SpecStatus, it.Priority, boolInt(it.Blocked), it.BlockedReason,
 			it.Position, it.ExtKey, it.CreatedAt, it.UpdatedAt); err != nil {
 			return nil, err
@@ -667,8 +708,8 @@ func (s *Store) UpsertByExtKey(ctx context.Context, agentID string, it *board.It
 		it.ID = existingID
 		it.UpdatedAt = ts
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE item SET parent_id=?,kind=?,title=?,body=?,column_key=?,lane_key=?,spec_ref=?,spec_status=?,priority=?,blocked=?,blocked_reason=?,updated_at=? WHERE id=?`,
-			parent, it.Kind, it.Title, it.Body, it.ColumnKey, lane, it.SpecRef, it.SpecStatus,
+			`UPDATE item SET parent_id=?,kind=?,title=?,body=?,content=?,column_key=?,lane_key=?,spec_ref=?,spec_status=?,priority=?,blocked=?,blocked_reason=?,updated_at=? WHERE id=?`,
+			parent, it.Kind, it.Title, it.Body, it.Content, it.ColumnKey, lane, it.SpecRef, it.SpecStatus,
 			it.Priority, boolInt(it.Blocked), it.BlockedReason, it.UpdatedAt, it.ID); err != nil {
 			return nil, err
 		}
@@ -800,10 +841,10 @@ func (s *Store) getItem(ctx context.Context, itemID string) (*board.Item, error)
 	var it board.Item
 	var blocked int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id,plan_id,COALESCE(parent_id,''),kind,title,body,column_key,COALESCE(lane_key,''),
+		`SELECT id,plan_id,COALESCE(parent_id,''),kind,title,body,content,column_key,COALESCE(lane_key,''),
 		        spec_ref,spec_status,priority,blocked,blocked_reason,position,ext_key,created_at,updated_at
 		 FROM item WHERE id=?`, itemID).
-		Scan(&it.ID, &it.PlanID, &it.ParentID, &it.Kind, &it.Title, &it.Body,
+		Scan(&it.ID, &it.PlanID, &it.ParentID, &it.Kind, &it.Title, &it.Body, &it.Content,
 			&it.ColumnKey, &it.LaneKey, &it.SpecRef, &it.SpecStatus, &it.Priority,
 			&blocked, &it.BlockedReason, &it.Position, &it.ExtKey, &it.CreatedAt, &it.UpdatedAt)
 	if err == sql.ErrNoRows {
@@ -868,6 +909,28 @@ func (s *Store) SetSpec(ctx context.Context, agentID, itemID, specRef string, st
 	return s.commit(tx)
 }
 
+// SetContent replaces an item's content (the doc markdown a doc view renders). The
+// agent supplies it — the server never reads files.
+func (s *Store) SetContent(ctx context.Context, agentID, itemID, content string) error {
+	planID, err := s.itemPlan(ctx, itemID)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE item SET content=?, updated_at=? WHERE id=?`, content, now(), itemID); err != nil {
+		return err
+	}
+	if err := logEventTx(ctx, tx, planID, itemID, agentID, "content", fmt.Sprintf("%d bytes", len(content))); err != nil {
+		return err
+	}
+	return s.commit(tx)
+}
+
 // AddLabels validates and adds labels to an item (idempotent).
 func (s *Store) AddLabels(ctx context.Context, agentID, itemID string, labels []board.Label) error {
 	planID, err := s.itemPlan(ctx, itemID)
@@ -920,7 +983,7 @@ type Filter struct {
 }
 
 func (s *Store) ListItems(ctx context.Context, planID string, f Filter) ([]board.Item, error) {
-	q := `SELECT id,plan_id,COALESCE(parent_id,''),kind,title,body,column_key,COALESCE(lane_key,''),
+	q := `SELECT id,plan_id,COALESCE(parent_id,''),kind,title,body,content,column_key,COALESCE(lane_key,''),
 	             spec_ref,spec_status,priority,blocked,blocked_reason,position,ext_key,created_at,updated_at
 	      FROM item WHERE plan_id=?`
 	args := []any{planID}
@@ -955,7 +1018,7 @@ func (s *Store) ListItems(ctx context.Context, planID string, f Filter) ([]board
 	for rows.Next() {
 		var it board.Item
 		var blocked int
-		if err := rows.Scan(&it.ID, &it.PlanID, &it.ParentID, &it.Kind, &it.Title, &it.Body,
+		if err := rows.Scan(&it.ID, &it.PlanID, &it.ParentID, &it.Kind, &it.Title, &it.Body, &it.Content,
 			&it.ColumnKey, &it.LaneKey, &it.SpecRef, &it.SpecStatus, &it.Priority,
 			&blocked, &it.BlockedReason, &it.Position, &it.ExtKey, &it.CreatedAt, &it.UpdatedAt); err != nil {
 			return nil, err

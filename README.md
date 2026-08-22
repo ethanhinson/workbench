@@ -19,9 +19,9 @@ board_start "Auth work"   → board_id            an agent creates/selects a boa
   `(project, name)` — idempotent — so the same board name can exist under different
   projects, and the UI groups boards by project. **Every tool names its `board_id`
   explicitly — there is no hidden "active board."**
-- **The board owns live in-flight work.** Backlog, done, and ADRs are **decoupled
-  read-only inputs**, projected in from an external source (docket today) via a
-  pluggable `SourceProvider` — see [Sources](#external-sources-decoupled-inputs).
+- **The board's shape is agent-authored.** A methodology (docket / OpenSpec /
+  Superpowers) is a **skill** that declares the board's layout and projects the
+  tool's artifacts onto it — see [Agentic layout](#agentic-layout--methodologies-are-skills).
 
 The board is **columns × swim lanes**. Columns are the workflow; lanes are
 configurable and default to **one per agent**, so several agents can share one
@@ -80,14 +80,14 @@ Invalid moves are rejected by the server, so the board can't drift out of policy
 ## Visualization — a pluggable UI layer
 
 The board is exposed as a renderer-agnostic **Snapshot** (schema-versioned JSON:
-plan, columns, lanes, items, links, per-view placements, and stats). That Snapshot
+plan, **layout**, items (with labels + `content`), links, and stats). That Snapshot
 is the seam — the bundled SPA, an on-demand generated component, or a static export
-all consume the same shape.
+all consume the same shape, reading no files (all content is in the snapshot).
 
 - **`GET /api/board`** — the Snapshot contract (CORS-open, so external renderers can fetch it).
 - **`GET /api/stream`** — the same Snapshot pushed over **SSE** on every store mutation (no polling).
-- **`GET /api/item/{id}`** — full card detail: bidirectional dependencies + rendered spec/plan content.
-- **`GET /`** — a zero-build reference SPA (embedded, vanilla JS, live over SSE via `EventSource`).
+- **`GET /api/item/{id}`** — full card detail: the item (with its `content`) + bidirectional dependencies.
+- **`GET /`** — a zero-build reference SPA that renders whatever `layout` the board declares.
 - **MCP `board_export`** — hands an agent the same Snapshot, to drive on-demand UI generation.
 
 ### Live updates: SSE, read-only board
@@ -111,40 +111,40 @@ selects its board with `?board=<id>` (defaulting to the board seeded at startup)
 ./kanban-mcp --db ./runbook.db --agent alice --http :7777
 ```
 
-## External sources (decoupled inputs)
+## Agentic layout — methodologies are skills
 
-The board process owns the agent's **live in-flight work**. Everything else —
-backlog, done, ADRs — is a **read-only projection** from an external source of
-truth, behind a pluggable `SourceProvider` seam (`internal/source`). Which source
-refreshes, and when, is decoupled from the running board: an agent, a CLI flag, or
-a cron triggers a sync; the board never owns the source.
+A board's shape is **data the agent authors**, not hard-coded. `board_set_layout`
+declares the **nav** tabs and their **views**; each view is one of four types:
 
-**docket** is the first provider. [docket](https://github.com/ethanhinson) tracks
-work as markdown change manifests (and ADRs) on the repo's metadata branch. Because
-that's just markdown-on-a-branch, kanban-mcp reads it directly — no docket tooling
-or specific agent required.
+- `list` — a flat list of cards
+- `lanes` — columns × swimlanes grid
+- `board` — vertical swimlanes only
+- `doc` — a rendered-markdown reader over cards' `content`
 
-```sh
-# one-shot projection onto the seeded board (idempotent; re-run to refresh)
-kanban-mcp --db /tmp/fuse-board.db --plan "Fuse Backlog" --profile docket \
-  --source docket --docs-dir ~/dev/fuse/.docket/docs
+Placement is **explicit labels**: an item's `view:` / `lane:` / `column:` labels
+decide where it appears. The renderer just buckets by tag — no Go placement logic.
+A board with no layout renders an empty state until a skill (or `board_set_layout`)
+shapes it.
 
-# then browse it
-kanban-mcp --db /tmp/fuse-board.db --viz-only --http :7777
-```
+**Content lives on the card, not the filesystem.** The agent puts a spec/ADR's
+markdown into the item's `content` field (via `item_upsert` / `item_set_content`);
+the `doc` view renders it. The server reads no files — there is no `--repo-root`.
 
-Or from an agent: call **`source_sync`** with
-`{ "board_id": "<id>", "source": "docket", "docs_dir": "<repo>/.docket/docs" }`.
+A **methodology is a skill** (`skills/kanban-<tool>/SKILL.md`): a prompt that reads
+a tool's files, declares a tool-idiomatic layout, and upserts cards (keyed by a
+stable `ext_key`) as the agent works. Shipped:
 
-If the metadata branch isn't checked out to a worktree, export it read-only first:
-`git -C <repo> archive docket docs | tar -x -C "$TMP"` and point `--docs-dir` at
-`$TMP/docs`. The **`kanban-docket-sync` skill** (`skills/`) automates this resolution.
+| Skill | For a repo with… | Builds |
+|---|---|---|
+| **kanban-docket** | `.docket/docs/changes/` | Backlog / In-Flight / ADRs / Done |
+| **kanban-openspec** | `openspec/changes/` + `specs/` | Proposals / Tasks / Specs / Archive |
+| **kanban-superpowers** | `docs/superpowers/{specs,plans}` | Plans / In-Progress / Specs / Reviews |
+| **kanban-session** | (ad-hoc) | a board you shape by hand |
+| **kanban-methodologies** | — | index skill: picks the right one |
 
-Mapping: change → card (`docket:<id>`), `status` → column, `type` → swim lane,
-`priority` → `p0..p3`, spec/plan presence → spec status, `blocked_by` → blocked flag,
-`depends_on`/`discovered_from`/`related` → first-class links. ADRs project as
-reference cards (`adr:<id>`) in an `adr` lane, linked to the change they came from.
-The board is read-only over the source — the source stays the source of truth.
+Hydration is a **rhythm**: whenever the agent touches a source artifact, it
+`item_upsert`s that card (same `ext_key` → idempotent update). The board is a live
+projection of the session; a full re-hydrate is just that loop over every artifact.
 
 ## Tools
 
@@ -153,23 +153,26 @@ tools take an **`item_id`** and resolve the board from it.
 
 | Tool | Purpose |
 |------|---------|
-| `board_start` | **Start here.** Create/select a board by `(project, name)` → returns `board_id` (idempotent). Optional `project` (a dir path) defaults to the server's working directory |
+| `board_start` | **Start here.** Create/select a board by `(project, name)` → `board_id` (idempotent). Optional `project` defaults to the server cwd |
 | `board_list` | List boards (id, name, project, profile, item count); optional `project` filter |
-| `board_delete` | Delete a board and everything on it (items, links, labels, comments) — irreversible |
-| `board_rename` | Rename a board (names are unique within its project) |
-| `board_set_project` | Move a board to a different project (a directory path) |
-| `board_view` | Render one board (columns × lanes) — the single pane of glass |
-| `item_create` | Create an epic/story/task/bug/spike on a board; nest via `parent_id` |
-| `item_link` | Link two items: `depends_on` \| `related` \| `discovered_from` (flat, not nested) |
-| `item_move` | Move to a column (and optionally a lane); respects WIP limits |
-| `item_set_spec` | Set `spec_ref` + `spec_status` for SDD tracking |
+| `board_set_layout` | **Shape the board:** declare `nav` tabs + `views` (`list\|lanes\|board\|doc`). Required before anything renders |
+| `board_get_layout` | Read the current layout to tweak it |
+| `board_delete` | Delete a board and everything on it — irreversible |
+| `board_rename` | Rename a board (names unique within its project) |
+| `board_set_project` | Move a board to a different project |
+| `board_view` | Render one board (columns × lanes) as text |
+| `item_create` | Create an epic/story/task/bug/spike; tag `view:`/`lane:`/`column:` + `content` |
+| `item_upsert` | Create-or-update a card by `ext_key` (idempotent) — the hydration primitive |
+| `item_set_content` | Replace a card's `content` (the doc markdown a `doc` view renders) |
+| `item_link` | Link two items: `depends_on` \| `related` \| `discovered_from` |
+| `item_move` | Move to a profile column (respects WIP/gates) |
+| `item_set_spec` | Set `spec_ref` + `spec_status` |
 | `item_set_blocked` | Flag/unflag blocked with a reason |
-| `item_label` | Add validated `ns:value` labels |
+| `item_label` | Add validated `ns:value` labels (incl. `view:`/`lane:`/`column:`) |
 | `item_comment` | Append to an item's activity log |
 | `lane_configure` | Create/ensure a swim lane on a board |
-| `items_list` | List a board's items with filters (column/lane/parent/kind) |
-| `board_export` | Export the renderer-agnostic Snapshot for on-demand/custom UI |
-| `source_sync` | Project an external source (docket) onto a board, read-only + idempotent |
+| `items_list` | List a board's items with filters |
+| `board_export` | Export the renderer-agnostic Snapshot (incl. layout) for a custom UI |
 
 ## Run
 
@@ -197,7 +200,7 @@ Register with an MCP client (e.g. Claude Code `.mcp.json`):
 }
 ```
 
-Env var equivalents: `KANBAN_DB`, `KANBAN_PLAN`, `KANBAN_AGENT`, `KANBAN_PROJECT`, `KANBAN_DOCS_DIR`.
+Env var equivalents: `KANBAN_DB`, `KANBAN_PLAN`, `KANBAN_AGENT`, `KANBAN_PROJECT`.
 
 ## Test
 
