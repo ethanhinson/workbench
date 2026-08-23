@@ -1,6 +1,6 @@
 ---
 name: kanban-superpowers
-description: Use when the user wants a live kanban board of a Superpowers SDD project — reading docs/superpowers/{specs,plans} and .superpowers execution state and projecting them onto a kanban-mcp board. Trigger on "show the superpowers board", "kanban of my plans", "visualize superpowers".
+description: Use when the user wants a live kanban board of a Superpowers SDD project — reading docs/superpowers/{specs,plans} and .superpowers execution state and projecting them onto a Workbench board. Trigger on "show the superpowers board", "kanban of my plans", "visualize superpowers".
 ---
 
 # kanban-superpowers — project a Superpowers workflow onto a kanban board
@@ -15,7 +15,7 @@ through **brainstorm → spec → plan → execute**, storing artifacts at:
   diffs (`task-N-brief.md`, `task-N-report.md`, `review-*.diff`, `progress.md`)
 
 This skill teaches you to read those and build a **Superpowers-idiomatic kanban
-board** via kanban-mcp — you read the files, upsert the cards, declare the layout.
+board** via Workbench — you read the files, upsert the cards, declare the layout.
 
 ## Prerequisites
 

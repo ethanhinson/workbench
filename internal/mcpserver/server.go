@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ethanhinson/kanban-mcp/internal/board"
-	"github.com/ethanhinson/kanban-mcp/internal/store"
+	"github.com/ethanhinson/workbench/internal/board"
+	"github.com/ethanhinson/workbench/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -38,7 +38,7 @@ func New(st *store.Store, agentID, profileKey, defaultProject string) (*mcp.Serv
 	}
 	s := &Server{st: st, agentID: agentID, defaultProfile: profileKey, defaultProject: defaultProject}
 	srv := mcp.NewServer(&mcp.Implementation{
-		Name:    "kanban-mcp",
+		Name:    "workbench",
 		Version: "0.1.0",
 	}, nil)
 	s.register(srv)

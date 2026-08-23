@@ -1,4 +1,4 @@
-// Command kanban-mcp is an MCP server exposing SDD-oriented kanban boards over
+// Command workbench is an MCP server exposing SDD-oriented kanban boards over
 // stdio. One --db file hosts many boards, grouped by project (a directory path);
 // the agent creates or selects a board at runtime with board_start, and each agent
 // connects with its own --agent identity and swim lane.
@@ -11,9 +11,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ethanhinson/kanban-mcp/internal/mcpserver"
-	"github.com/ethanhinson/kanban-mcp/internal/store"
-	"github.com/ethanhinson/kanban-mcp/internal/viz"
+	"github.com/ethanhinson/workbench/internal/mcpserver"
+	"github.com/ethanhinson/workbench/internal/store"
+	"github.com/ethanhinson/workbench/internal/viz"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -73,7 +73,7 @@ func main() {
 		if addr == "" {
 			addr = ":7777"
 		}
-		log.Printf("kanban-mcp viz-only on http://localhost%s", addr)
+		log.Printf("workbench viz-only on http://localhost%s", addr)
 		if err := viz.NewServer(st, focusID).Serve(ctx, addr); err != nil {
 			log.Fatalf("viz: %v", err)
 		}
@@ -82,14 +82,14 @@ func main() {
 	if *httpAddr != "" {
 		vzn := viz.NewServer(st, focusID)
 		go func() {
-			log.Printf("kanban-mcp viz on http://localhost%s", *httpAddr)
+			log.Printf("workbench viz on http://localhost%s", *httpAddr)
 			if err := vzn.Serve(ctx, *httpAddr); err != nil {
 				log.Printf("viz server stopped: %v", err)
 			}
 		}()
 	}
 
-	log.Printf("kanban-mcp serving plan %q (db=%s, agent=%s, profile=%s)", *plan, abs, *agent, *profile)
+	log.Printf("workbench serving plan %q (db=%s, agent=%s, profile=%s)", *plan, abs, *agent, *profile)
 	if err := srv.Run(ctx, &mcp.StdioTransport{}); err != nil {
 		log.Fatalf("serve: %v", err)
 	}

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ethanhinson/kanban-mcp/internal/board"
-	"github.com/ethanhinson/kanban-mcp/internal/store"
+	"github.com/ethanhinson/workbench/internal/board"
+	"github.com/ethanhinson/workbench/internal/store"
 )
 
 // TestSSEPushesOnMutation proves the store broker -> SSE path: a connected client

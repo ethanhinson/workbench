@@ -1,152 +1,148 @@
-# kanban-mcp
+# Workbench
 
-An MCP server that gives a coding agent **kanban boards** for spec-driven
-development (SDD / Spec-DD) — a single pane of glass over the work discussed and
-done in a run.
+Workbench is a live kanban board for your coding agent. It runs as an MCP server,
+so an agent (Claude Code, or anything that speaks MCP) can start a board, shape it,
+and keep it current as it works. You open the board in a browser and watch the work
+move in real time.
 
-The agent **starts a board** at runtime and drives it live:
+The idea is simple. Your project already tracks work somewhere: docket change
+manifests, OpenSpec proposals and tasks, Superpowers plans, or just the tasks in
+this session. Workbench turns any of those into a board the agent drives, without
+you copying anything by hand.
+
+## What makes it different
+
+**The agent shapes the board, not the code.** A board has no fixed columns. The
+agent declares a layout (which tabs, which swim lanes, which views) with one tool
+call, and tags each card with where it belongs. So an OpenSpec board looks like
+OpenSpec, a docket board looks like docket, and both are drawn by the same renderer.
+
+**Methodologies are skills, not plugins.** Support for docket, OpenSpec, or
+Superpowers is a prompt (a skill) that reads the tool's files and drives Workbench's
+tools. Adding a new methodology means writing one skill, not touching the server.
+
+**It stays live as a byproduct of the work.** There is no separate sync step. When
+the agent edits a spec or checks off a task, it upserts that card in the same beat,
+so the board is always as fresh as the session.
+
+**Many boards, grouped by project.** One database holds many boards. Each board
+belongs to a project (a directory by default), and the sidebar groups them, so one
+Workbench serves every repo you touch.
+
+## Quick look
 
 ```
-board_start "Auth work"   → board_id            an agent creates/selects a board
- ├─ item_create story/task/…                     add work to it (board_id)
- ├─ item_link  from → to  (depends_on|related)   wire dependencies (flat, not nested)
- └─ item_move  → specifying → specd → …          drive it as the session progresses
+board_start   "auth work"           -> a board_id (idempotent, project-scoped)
+board_set_layout   { nav, views }    -> tabs + swim lanes; the board's whole shape
+item_upsert   { ext_key, content,    -> a card, keyed for idempotent re-runs,
+                lane: doing,            placed by its labels, carrying the doc it
+                group: auth }           renders
 ```
 
-- **Many boards per database, grouped by project.** One SQLite file hosts many
-  boards; each board belongs to a **project** (by default the working directory, so
-  "a project is a directory"). `board_start` creates or selects a board by
-  `(project, name)` — idempotent — so the same board name can exist under different
-  projects, and the UI groups boards by project. **Every tool names its `board_id`
-  explicitly — there is no hidden "active board."**
-- **The board's shape is agent-authored.** A methodology (docket / OpenSpec /
-  Superpowers) is a **skill** that declares the board's layout and projects the
-  tool's artifacts onto it — see [Agentic layout](#agentic-layout--methodologies-are-skills).
+Lanes are status (To Do, Doing, Done, or a pipeline). The epic or group a card
+belongs to (a change, a plan, a type) shows as a colored chip, not another axis.
 
-The board is **columns × swim lanes**. Columns are the workflow; lanes are
-configurable and default to **one per agent**, so several agents can share one
-board while each owns a lane that rolls up into it. Items can still nest
-(`parent_id`: epic → story → task), but relationships are expressed as
-first-class **links**, not containment.
+## Onboarding
 
-## Design choices
+Workbench has two layers. The server gives an agent the tools; a skill teaches the
+agent how to use them for your methodology.
 
-- **SQLite, many boards per file.** WAL + `busy_timeout` so concurrent agents can
-  read/write. Set the file with `--db`; create/select boards with `board_start`.
-- **Runtime boards, explicit ids.** No launch-time plan binding is required —
-  `board_start` returns a `board_id` you pass to every other tool. Each agent
-  connects with its own `--agent` id and gets a swim lane automatically.
-- **SDD-opinionated, overridable columns:**
-  `Backlog → Specifying → Spec'd → In Progress → Review → Done`.
-  `Blocked` is a flag on an item, not a column — a blocked item keeps its stage.
-- **Consistent labels.** Namespaced and enum-validated so agents can't drift the
-  taxonomy:
-  - `type:` epic | story | task | bug | spike
-  - `priority:` p0 | p1 | p2 | p3
-  - `spec:` missing | draft | approved
-  - `stage:` (kept in sync with the plan's columns)
-  - `agent:` / `area:` (open — any slug)
-- **Spec tracking is first-class.** Every item carries a `spec_ref` and
-  `spec_status` (the SDD heartbeat), settable via `item_set_spec`.
-- **Audit log.** Every create/move/label/block/comment is appended to an event
-  log, so an agent can reconstruct "what's discussed" in a run.
-
-## Methodology profiles — how the workflow influences swim lanes
-
-Columns and swim lanes are **orthogonal** storage. A **profile** is the thing that
-binds meaning to both axes and enforces how they interact. Selected on first init
-with `--profile` (or `KANBAN_PROFILE`); overridable per plan.
-
-A profile declares:
-
-- **columns** — the workflow stages
-- **lane_dimension** — *what a lane means*: `agent` | `epic` | `class_of_service` | custom
-- **policies** — the rules the server enforces on every move/create:
-  - `column_gates` — preconditions to *leave* a column (e.g. `spec_status=approved`)
-  - `transitions` — allowed column→column moves
-  - `lane_wip` — per-lane WIP caps
-  - `exempt_lanes` — lanes that bypass gates/WIP
-
-Built-in presets show three different answers to "how does the workflow touch lanes":
-
-| Profile | lane = | The coupling |
-|---|---|---|
-| **sdd** | agent | Nothing leaves `Spec'd` until `spec_status=approved`, and nothing advances while blocked — enforced **across every lane**. The workflow constrains all lanes. |
-| **scrum** | epic | Strict left-to-right `transitions`; stories flow within their epic's lane. |
-| **kanban** | class of service | `standard` lane has WIP 5; the `expedite` lane is **exempt** — here a *lane* overrides the *workflow*. |
-
-Invalid moves are rejected by the server, so the board can't drift out of policy.
-
-## Visualization — a pluggable UI layer
-
-The board is exposed as a renderer-agnostic **Snapshot** (schema-versioned JSON:
-plan, **layout**, items (with labels + `content`), links, and stats). That Snapshot
-is the seam — the bundled SPA, an on-demand generated component, or a static export
-all consume the same shape, reading no files (all content is in the snapshot).
-
-- **`GET /api/board`** — the Snapshot contract (CORS-open, so external renderers can fetch it).
-- **`GET /api/stream`** — the same Snapshot pushed over **SSE** on every store mutation (no polling).
-- **`GET /api/item/{id}`** — full card detail: the item (with its `content`) + bidirectional dependencies.
-- **`GET /`** — a zero-build reference SPA that renders whatever `layout` the board declares.
-- **MCP `board_export`** — hands an agent the same Snapshot, to drive on-demand UI generation.
-
-### Live updates: SSE, read-only board
-
-Every store mutation bumps a revision on an in-process broker; `GET /api/stream`
-turns that into Server-Sent Events. The board is **read-only from the UI's side**
-(the agent writes through MCP), so SSE — server→client push over plain HTTP with
-auto-reconnect — is the right fit; WebSockets would add a duplex channel nothing
-uses.
-
-> A terminal UI (TUI) client is deliberately out of scope for now — the Snapshot +
-> SSE contract makes one easy to add later without server changes.
-
-The UI shows a **board picker** when the db holds more than one board; a request
-selects its board with `?board=<id>` (defaulting to the board seeded at startup).
+### 1. Build and install the binary
 
 ```sh
-# browse boards in a db (no agent needed)
-./kanban-mcp --db ./runbook.db --viz-only --http :7777
-# or serve the UI alongside the MCP stdio server
-./kanban-mcp --db ./runbook.db --agent alice --http :7777
+git clone https://github.com/ethanhinson/workbench
+cd workbench
+go build -o ~/.local/bin/workbench ./cmd/workbench
 ```
 
-## Agentic layout — methodologies are skills
+That produces a single static binary (no CGO, SQLite is bundled). Make sure
+`~/.local/bin` is on your `PATH`.
 
-A board's shape is **data the agent authors**, not hard-coded. `board_set_layout`
-declares the **nav** tabs and their **views**; each view is one of four types:
+### 2. Register it as a global MCP server (Claude Code)
 
-- `list` — a flat list of cards
-- `lanes` — swimlanes where **lanes are status** (To Do/Doing/Done, or a pipeline)
-- `board` — vertical swimlanes only
-- `doc` — a rendered-markdown reader over cards' `content`
+One shared server, available in every project:
 
-Placement is **explicit labels**: an item's `view:` (which nav view) and `lane:`
-(which status lane) decide where it appears; a **`group:` label** shows an
-epic/grouping (a change, plan, or type) as a color-coded chip on the card — a
-glanceable grouping, not an axis. The renderer just buckets by tag — no Go
-placement logic. A board with no layout renders an empty state until a skill (or
-`board_set_layout`) shapes it.
+```sh
+mkdir -p ~/.workbench
+claude mcp add workbench --scope user -- \
+  workbench --db ~/.workbench/boards.db --agent claude --http :7777
+```
 
-**Content lives on the card, not the filesystem.** The agent puts a spec/ADR's
-markdown into the item's `content` field (via `item_upsert` / `item_set_content`);
-the `doc` view renders it. The server reads no files — there is no `--repo-root`.
+`--http :7777` serves the browser board at <http://localhost:7777>. The one
+database holds every project's boards; the agent names each board's project at
+`board_start`, so nothing collides.
 
-A **methodology is a skill** (`skills/kanban-<tool>/SKILL.md`): a prompt that reads
-a tool's files, declares a tool-idiomatic layout, and upserts cards (keyed by a
-stable `ext_key`) as the agent works. Shipped:
+Confirm it connected:
 
-| Skill | For a repo with… | Builds |
+```sh
+claude mcp list        # workbench: ... - Connected
+```
+
+### 3. Install the skills your harness needs
+
+The skills are what make an agent actually build and maintain a board. Copy the
+ones you want into your harness's skills directory. For Claude Code that is
+`.claude/skills/` in a repo (project scope) or `~/.claude/skills/` (global):
+
+```sh
+# global, so every project can use them:
+cp -r skills/kanban-* ~/.claude/skills/
+```
+
+The skills:
+
+| Skill | Use it when the repo has | Builds |
 |---|---|---|
-| **kanban-docket** | `.docket/docs/changes/` | Backlog / In-Flight / ADRs / Done |
-| **kanban-openspec** | `openspec/changes/` + `specs/` | Proposals / Tasks / Specs / Archive |
-| **kanban-superpowers** | `docs/superpowers/{specs,plans}` | Plans / In-Progress / Specs / Reviews |
-| **kanban-session** | (ad-hoc) | a board you shape by hand |
-| **kanban-methodologies** | — | index skill: picks the right one |
+| `kanban-methodologies` | (any) | An index that detects the repo's tool and points at the right skill |
+| `kanban-docket` | `.docket/docs/changes/` | Backlog, In Flight, ADRs, Done |
+| `kanban-openspec` | `openspec/changes/` and `specs/` | Proposals, Tasks, Specs, Archive |
+| `kanban-superpowers` | `docs/superpowers/{specs,plans}` | Plans, In Progress, Specs, Reviews |
+| `kanban-session` | (ad hoc) | A board you shape by hand as you work |
 
-Hydration is a **rhythm**: whenever the agent touches a source artifact, it
-`item_upsert`s that card (same `ext_key` → idempotent update). The board is a live
-projection of the session; a full re-hydrate is just that loop over every artifact.
+### 4. Use it
+
+In a repo, tell your agent what you want, for example "put this project's docket
+backlog on a board" or "start a board for this session". The agent invokes the
+matching skill, starts a project-scoped board, sets its layout, and fills it. Open
+<http://localhost:7777> and pick the board from the sidebar. It updates live over
+Server-Sent Events as the agent works.
+
+## How it works
+
+A board's shape is data the agent authors, not fixed in the code. `board_set_layout`
+declares the nav tabs and their views. A view is one of four types:
+
+- `list` a flat list of cards
+- `lanes` swim lanes where lanes are status (To Do, Doing, Done, or a pipeline)
+- `board` vertical swim lanes only
+- `doc` a rendered-markdown reader over each card's `content`
+
+Placement is explicit labels. An item's `view:` label picks which nav view it
+appears in, `lane:` picks its status lane, and `group:` shows an epic or grouping (a
+change, a plan, a type) as a color-coded chip on the card. The renderer just buckets
+cards by their labels, so there is no placement logic in the server. A board with no
+layout renders an empty state until a skill or `board_set_layout` shapes it.
+
+Content lives on the card, not the filesystem. The agent puts a spec or ADR's
+markdown into the item's `content` field, and the `doc` view renders it. The server
+never reads files, so any renderer works anywhere the snapshot reaches.
+
+A methodology is a skill under `skills/kanban-<tool>/SKILL.md`: a prompt that reads a
+tool's files, declares a tool-idiomatic layout, and upserts cards keyed by a stable
+`ext_key`. Hydration is a rhythm rather than a batch job: whenever the agent touches
+a source artifact it upserts that card with the same key, which only updates, so the
+board stays as fresh as the work.
+
+The board is exposed as a renderer-agnostic Snapshot (JSON: plan, layout, items with
+labels and content, links, stats), served at `GET /api/board` and pushed over
+Server-Sent Events at `GET /api/stream` on every change. The bundled single-page app
+is one consumer; the same contract drives a custom renderer or a static export.
+
+```sh
+# browse boards in a database without an agent
+workbench --db ~/.workbench/boards.db --viz-only --http :7777
+```
+
 
 ## Tools
 
@@ -159,12 +155,12 @@ tools take an **`item_id`** and resolve the board from it.
 | `board_list` | List boards (id, name, project, profile, item count); optional `project` filter |
 | `board_set_layout` | **Shape the board:** declare `nav` tabs + `views` (`list\|lanes\|board\|doc`). Required before anything renders |
 | `board_get_layout` | Read the current layout to tweak it |
-| `board_delete` | Delete a board and everything on it — irreversible |
+| `board_delete` | Delete a board and everything on it (irreversible) |
 | `board_rename` | Rename a board (names unique within its project) |
 | `board_set_project` | Move a board to a different project |
 | `board_view` | Render one board (columns × lanes) as text |
 | `item_create` | Create an epic/story/task/bug/spike; tag `view:`/`lane:`/`column:` + `content` |
-| `item_upsert` | Create-or-update a card by `ext_key` (idempotent) — the hydration primitive |
+| `item_upsert` | Create-or-update a card by `ext_key` (idempotent), the hydration primitive |
 | `item_set_content` | Replace a card's `content` (the doc markdown a `doc` view renders) |
 | `item_link` | Link two items: `depends_on` \| `related` \| `discovered_from` |
 | `item_move` | Move to a profile column (respects WIP/gates) |
@@ -179,14 +175,14 @@ tools take an **`item_id`** and resolve the board from it.
 ## Run
 
 ```sh
-go build -o kanban-mcp ./cmd/kanban-mcp
-./kanban-mcp --db ./runbook.db --agent alice
+go build -o ~/.local/bin/workbench ./cmd/workbench
+workbench --db ./runbook.db --agent alice
 ```
 
 An agent then calls `board_start` to create/select a board. Boards default to the
 project named by `--project` (or the server's working directory if unset), so with
-a global/shared db you can pass your project root — e.g. `board_start` with
-`project: $CLAUDE_PROJECT_DIR` — to keep each project's boards grouped. (`--plan`
+a global/shared db you can pass your project root, e.g. `board_start` with
+`project: $CLAUDE_PROJECT_DIR`, to keep each project's boards grouped. (`--plan`
 still seeds a default board for single-board / back-compat use, but isn't required.)
 
 Register with an MCP client (e.g. Claude Code `.mcp.json`):
@@ -195,7 +191,7 @@ Register with an MCP client (e.g. Claude Code `.mcp.json`):
 {
   "mcpServers": {
     "kanban": {
-      "command": "/path/to/kanban-mcp",
+      "command": "/path/to/workbench",
       "args": ["--db", "/path/to/runbook.db", "--agent", "alice", "--http", ":7777"]
     }
   }

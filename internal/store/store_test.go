@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ethanhinson/kanban-mcp/internal/board"
+	"github.com/ethanhinson/workbench/internal/board"
 )
 
 func newTestStore(t *testing.T) (*Store, *board.Plan) {

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ethanhinson/kanban-mcp/internal/board"
-	"github.com/ethanhinson/kanban-mcp/internal/store"
+	"github.com/ethanhinson/workbench/internal/board"
+	"github.com/ethanhinson/workbench/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

@@ -1,6 +1,6 @@
 ---
 name: kanban-docket
-description: Use when the user wants a live kanban board of a repo's docket backlog — reading docket change manifests + ADRs and projecting them onto a kanban-mcp board with a docket-idiomatic layout. Trigger on "show the docket board", "kanban of the backlog", "visualize docket", "board for this repo's docket".
+description: Use when the user wants a live kanban board of a repo's docket backlog — reading docket change manifests + ADRs and projecting them onto a Workbench board with a docket-idiomatic layout. Trigger on "show the docket board", "kanban of the backlog", "visualize docket", "board for this repo's docket".
 ---
 
 # kanban-docket — project a docket backlog onto a kanban board
@@ -10,7 +10,7 @@ description: Use when the user wants a live kanban board of a repo's docket back
 [Docket](https://github.com/ethanhinson) tracks work as markdown **change
 manifests** under `.docket/docs/changes/{active,archive}/*.md` (YAML-ish
 frontmatter) plus **ADRs** under `docs/adrs/`. This skill teaches you to read those
-files and build a **docket-idiomatic kanban board** from them via kanban-mcp's MCP
+files and build a **docket-idiomatic kanban board** from them via Workbench's MCP
 tools — no importer, no server-side file reading. You read the files; you upsert
 the cards; the board renders whatever layout you declare.
 

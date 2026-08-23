@@ -1,6 +1,6 @@
 ---
 name: kanban-openspec
-description: Use when the user wants a live kanban board of an OpenSpec project — reading openspec/changes and openspec/specs and projecting them onto a kanban-mcp board with an OpenSpec-idiomatic layout. Trigger on "show the openspec board", "kanban of my openspec changes", "visualize openspec".
+description: Use when the user wants a live kanban board of an OpenSpec project — reading openspec/changes and openspec/specs and projecting them onto a Workbench board with an OpenSpec-idiomatic layout. Trigger on "show the openspec board", "kanban of my openspec changes", "visualize openspec".
 ---
 
 # kanban-openspec — project an OpenSpec workflow onto a kanban board
@@ -14,7 +14,7 @@ from **proposed changes** (`openspec/changes/<name>/` folders, each with
 to `openspec/changes/archive/`.
 
 This skill teaches you to read those files and build an **OpenSpec-idiomatic kanban
-board** via kanban-mcp's MCP tools — you read the files, upsert the cards, and
+board** via Workbench's MCP tools — you read the files, upsert the cards, and
 declare the layout. No server-side file reading.
 
 ## Prerequisites

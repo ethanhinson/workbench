@@ -1,11 +1,11 @@
 ---
 name: kanban-methodologies
-description: Use to choose how to set up a kanban-mcp board for a project's methodology — an index of the per-tool skills (docket, openspec, superpowers) and the shared agentic-layout model behind them. Trigger on "set up a kanban board for this repo", "which kanban skill", "put my backlog on a board".
+description: Use to choose how to set up a Workbench board for a project's methodology — an index of the per-tool skills (docket, openspec, superpowers) and the shared agentic-layout model behind them. Trigger on "set up a kanban board for this repo", "which kanban skill", "put my backlog on a board".
 ---
 
 # kanban-methodologies — pick the right board setup skill
 
-kanban-mcp boards are **agentic**: the board's layout (nav tabs + views) and the
+Workbench boards are **agentic**: the board's layout (nav tabs + views) and the
 placement of every card are **data you author**, not hard-coded. A "methodology" is
 just a **skill** — a prompt that reads a tool's files and projects them onto a
 board with a tool-idiomatic shape. (OpenSpec ships its own integration as skills

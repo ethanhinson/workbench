@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/ethanhinson/kanban-mcp/internal/store"
+	"github.com/ethanhinson/workbench/internal/store"
 )
 
 //go:embed static/*

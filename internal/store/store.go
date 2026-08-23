@@ -1,4 +1,4 @@
-// Package store is the SQLite persistence layer for kanban-mcp.
+// Package store is the SQLite persistence layer for Workbench.
 // One database file == one Plan (the shared top-level board). Concurrent agents
 // are supported via WAL + busy_timeout configured in schema.sql.
 package store
@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ethanhinson/kanban-mcp/internal/board"
+	"github.com/ethanhinson/workbench/internal/board"
 	"github.com/oklog/ulid/v2"
 	_ "modernc.org/sqlite"
 )

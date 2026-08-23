@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ethanhinson/kanban-mcp/internal/board"
+	"github.com/ethanhinson/workbench/internal/board"
 )
 
 // TestItemDetailWithLinksNoDeadlock guards the MaxOpenConns(1) hazard: resolving

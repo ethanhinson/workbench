@@ -1,13 +1,13 @@
 ---
 name: kanban-session
-description: Use when the user wants a live kanban board of the work happening in this Claude Code session — driving kanban-mcp directly over MCP so a board is started and items are created/moved/linked as the work progresses. Trigger on "start a board", "track this on the board", "show me a kanban of what we're doing", "put this on the kanban", "glue this session to the board".
+description: Use when the user wants a live kanban board of the work happening in this Claude Code session — driving Workbench directly over MCP so a board is started and items are created/moved/linked as the work progresses. Trigger on "start a board", "track this on the board", "show me a kanban of what we're doing", "put this on the kanban", "glue this session to the board".
 ---
 
 # kanban-session — start a board and drive it live from a Claude Code session
 
 ## Overview
 
-`kanban-mcp` is wired into Claude Code as the **`kanban`** MCP server (see the
+Workbench is wired into Claude Code as the **`workbench`** MCP server (see the
 repo's `.mcp.json`). The mental model:
 
 1. **Start a board** with `board_start` — you get back a `board_id`.
@@ -27,18 +27,12 @@ This `kanban-session` skill is for **ad-hoc session work** you shape by hand.
 
 ## Prerequisites
 
-1. **Build the binary** (it's gitignored; `.mcp.json` points at `./kanban-mcp`):
-   ```sh
-   go build -o kanban-mcp ./cmd/kanban-mcp
-   ```
-2. **Connected MCP server.** The `kanban` server appears in `/mcp`. It serves the
-   viz UI at <http://localhost:7777> (configured via `--http :7777` in `.mcp.json`)
-   and stores boards at `.kanban/session.db`.
+The `workbench` MCP server is available (globally in Claude Code; see `/mcp`). It
+serves the board UI at <http://localhost:7777> and stores boards in a shared
+database. If `/mcp` doesn't list `workbench`, install and register it per the
+Workbench README's onboarding, then reload.
 
-If `/mcp` doesn't list `kanban`, the binary is missing (build it, step 1) or the
-project MCP config wasn't approved — re-open the project and approve it.
-
-## The tools (all under the `kanban` server)
+## The tools (all under the `workbench` server)
 
 **Every item/board tool takes an explicit `board_id`** — there is no hidden
 "active board." Call `board_start` first and pass the returned id to the rest.
