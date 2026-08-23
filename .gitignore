@@ -9,3 +9,4 @@
 /.mcp.json
 # codeindex tool state (churns; not source)
 /.codeindex/
+/benchmarks/adoption/results/

@@ -1,0 +1,11 @@
+{
+  "methodology": "docket",
+  "repo": "repo",
+  "note": "Realistic tasks that never mention a board or Workbench. The bar is proactive adoption: does the agent surface the docket backlog on the board while doing normal backlog work?",
+  "tasks": [
+    "Review this repo's docket backlog and tell me which change to work on next, and why.",
+    "Give me a status report on this repo's docket work: what's proposed, in progress, and done.",
+    "I'm grooming the backlog. Which proposed changes still need a spec before they're build-ready?"
+  ],
+  "drift_nudge": "Can I see this on a board?"
+}
