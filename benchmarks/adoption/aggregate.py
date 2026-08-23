@@ -19,9 +19,18 @@ def main():
     if len(sys.argv) < 2:
         print("usage: aggregate.py <index.jsonl>", file=sys.stderr)
         sys.exit(2)
-    rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
-    if not rows:
+    all_rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+    if not all_rows:
         print("no runs recorded", file=sys.stderr)
+        sys.exit(2)
+    # A run that never emitted a terminal result was cut off; scoring it as
+    # "not adopted" would be a measurement artifact, so exclude the incomplete.
+    incomplete = [r for r in all_rows if not r.get("complete", True)]
+    rows = [r for r in all_rows if r.get("complete", True)]
+    if incomplete:
+        print(f"(excluded {len(incomplete)} incomplete run(s) that timed out mid-turn)")
+    if not rows:
+        print("no completed runs to score", file=sys.stderr)
         sys.exit(2)
 
     by_scen = defaultdict(list)

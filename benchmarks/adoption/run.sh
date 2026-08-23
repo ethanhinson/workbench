@@ -16,7 +16,9 @@ RUNS=3
 ONLY=""
 OUT="$HERE/results/$(date +%Y%m%d-%H%M%S)"
 MODEL=""
-TIMEOUT=240
+# A full hydrate (start board, set layout, upsert many cards) can take several
+# minutes. Too short a timeout truncates the run mid-adoption and under-reports it.
+TIMEOUT="${BENCH_TIMEOUT:-600}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -32,8 +34,18 @@ done
 command -v claude >/dev/null || { echo "claude CLI not found" >&2; exit 1; }
 mkdir -p "$OUT"
 
-# wait_for PID TIMEOUT — poll until the process exits or the deadline passes.
-wait_for() { local pid=$1 t=$2; for _ in $(seq 1 "$t"); do kill -0 "$pid" 2>/dev/null || return 0; sleep 1; done; kill "$pid" 2>/dev/null || true; }
+# wait_done STREAM TIMEOUT — wait until the run emits its terminal `result` event
+# (the true end of a claude -p turn) or the deadline passes. Returns 0 if the run
+# completed, 1 if it was cut off. This matters: a run killed mid-adoption must NOT
+# be scored as "not adopted" — it never finished.
+wait_done() {
+  local stream=$1 t=$2
+  for _ in $(seq 1 "$t"); do
+    grep -q '"type":"result"' "$stream" 2>/dev/null && return 0
+    sleep 1
+  done
+  return 1
+}
 
 results_index="$OUT/index.jsonl"
 : > "$results_index"
@@ -56,17 +68,21 @@ for scen_dir in "$HERE"/scenarios/*/; do
       cat > "$mcp" <<EOF
 { "mcpServers": { "workbench": { "type":"stdio","command":"$WORKBENCH_BIN","args":["--db","$db","--agent","claude"] } } }
 EOF
-      stream="$OUT/$tag.jsonl"
+      stream="$OUT/$tag.jsonl"; : > "$stream"
       model_arg=(); [ -n "$MODEL" ] && model_arg=(--model "$MODEL")
       echo "run $tag ..." >&2
       ( cd "$repo" && claude -p "$task" \
           --mcp-config "$mcp" --permission-mode bypassPermissions --setting-sources project \
           --output-format stream-json --verbose "${model_arg[@]}" > "$stream" 2>/dev/null ) &
-      wait_for $! "$TIMEOUT"
+      cpid=$!
+      complete=1
+      wait_done "$stream" "$TIMEOUT" || complete=0
+      kill "$cpid" 2>/dev/null || true   # only reaps if it timed out; a done run has already exited
 
       card=$(python3 "$HERE/score.py" "$stream" "$db")
       echo "$card" > "$OUT/$tag.score.json"
-      python3 -c "import json,sys;c=json.loads('''$card''');print(json.dumps({'tag':'$tag','scenario':'$scen','task':$ti,'run':$run,**c}))" >> "$results_index"
+      python3 -c "import json;c=json.loads('''$card''');print(json.dumps({'tag':'$tag','scenario':'$scen','task':$ti,'run':$run,'complete':bool($complete),**c}))" >> "$results_index"
+      [ "$complete" = 1 ] || echo "  WARN $tag did not complete within ${TIMEOUT}s (excluded from adoption rate)" >&2
     done
   done
 done
