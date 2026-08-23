@@ -12,12 +12,12 @@ related: []
 discovered_from: []
 adrs: []
 spec:
-plan:
+plan: docs/superpowers/plans/0001-loopback-bind-default-plan.md
 results:
 trivial: true
 auto_groomable:
 branch: feat/loopback-bind-default
-claimed_at: 2026-08-23T21:38:45Z
+claimed_at: 2026-08-23T21:39:41Z
 pr:
 blocked_by:
 reconciled: true
@@ -26,6 +26,9 @@ reconciled: true
 ## Artifacts
 
 <!-- docket:artifacts:start (generated — do not hand-edit) -->
+| Artifact | Link |
+|---|---|
+| Plan | [0001-loopback-bind-default-plan.md](https://github.com/ethanhinson/workbench/blob/feat/loopback-bind-default/docs/superpowers/plans/0001-loopback-bind-default-plan.md) |
 <!-- docket:artifacts:end -->
 
 ## Why
