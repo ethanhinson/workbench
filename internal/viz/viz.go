@@ -9,6 +9,7 @@ import (
 	"embed"
 	"encoding/json"
 	"io/fs"
+	"log"
 	"net/http"
 	"strings"
 
@@ -134,6 +135,9 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	defer unsub()
 
 	planID := s.board(r) // fixed for this connection; the client reconnects to switch boards
+	log.Printf("viz: SSE connect board=%s from=%s", planID, r.RemoteAddr)
+	defer log.Printf("viz: SSE disconnect board=%s from=%s", planID, r.RemoteAddr)
+	frames := 0
 	send := func() bool {
 		snap, err := s.st.Snapshot(r.Context(), planID)
 		if err != nil {
@@ -168,6 +172,8 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 			if !ok || !send() {
 				return
 			}
+			frames++
+			log.Printf("viz: SSE push board=%s frame=%d", planID, frames)
 		}
 	}
 }

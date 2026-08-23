@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ethanhinson/workbench/internal/mcpserver"
 	"github.com/ethanhinson/workbench/internal/store"
@@ -19,13 +20,13 @@ import (
 
 func main() {
 	var (
-		dbPath  = flag.String("db", envOr("KANBAN_DB", "kanban.db"), "path to the SQLite plan database")
-		plan    = flag.String("plan", envOr("KANBAN_PLAN", ""), "board to focus as the viz default (create-or-select by name). Empty => agents create boards at runtime via board_start")
-		project = flag.String("project", envOr("KANBAN_PROJECT", ""), "default project (a directory path) new boards belong to; empty => the working directory")
-		agent   = flag.String("agent", envOr("KANBAN_AGENT", "agent"), "calling agent id (its default swim lane)")
-		profile = flag.String("profile", envOr("KANBAN_PROFILE", "sdd"), "methodology profile on first init: sdd|scrum|kanban")
+		dbPath   = flag.String("db", envOr("KANBAN_DB", "kanban.db"), "path to the SQLite plan database")
+		plan     = flag.String("plan", envOr("KANBAN_PLAN", ""), "board to focus as the viz default (create-or-select by name). Empty => agents create boards at runtime via board_start")
+		project  = flag.String("project", envOr("KANBAN_PROJECT", ""), "default project (a directory path) new boards belong to; empty => the working directory")
+		agent    = flag.String("agent", envOr("KANBAN_AGENT", "agent"), "calling agent id (its default swim lane)")
+		profile  = flag.String("profile", envOr("KANBAN_PROFILE", "sdd"), "methodology profile on first init: sdd|scrum|kanban")
 		httpAddr = flag.String("http", envOr("KANBAN_HTTP", ""), "serve the viz UI + JSON board API on this addr (e.g. :7777); empty disables")
-		vizOnly = flag.Bool("viz-only", false, "run only the viz HTTP server (no MCP stdio) for browsing a board")
+		vizOnly  = flag.Bool("viz-only", false, "run only the viz HTTP server (no MCP stdio) for browsing a board")
 	)
 	flag.Parse()
 
@@ -73,18 +74,33 @@ func main() {
 		if addr == "" {
 			addr = ":7777"
 		}
-		log.Printf("workbench viz-only on http://localhost%s", addr)
+		// Default a host-less addr to loopback so a bare --http :7777 does not
+		// silently expose the board on every interface. Normalize once, here, so the
+		// logged URL and the actual bind can never disagree.
+		addr = viz.NormalizeAddr(addr)
+		// Watch bridges writes made by other processes (the MCP server) into this
+		// reader's broker, so the browser goes live on foreign writes. Without it a
+		// viz-only server is a static reader that only reflects writes on refresh.
+		go st.Watch(ctx, 0)
+		log.Printf("workbench viz-only on %s", browseURL(addr))
 		if err := viz.NewServer(st, focusID).Serve(ctx, addr); err != nil {
-			log.Fatalf("viz: %v", err)
+			log.Fatalf("viz: %v", err) // a failed bind (e.g. port in use) is fatal, not silent
 		}
 		return
 	}
 	if *httpAddr != "" {
+		addr := viz.NormalizeAddr(*httpAddr) // loopback default; see the viz-only branch
 		vzn := viz.NewServer(st, focusID)
+		// Also watch here: even the combined MCP+viz server may share its db file
+		// with other agents' processes, whose writes must reach this browser too.
+		go st.Watch(ctx, 0)
 		go func() {
-			log.Printf("workbench viz on http://localhost%s", *httpAddr)
-			if err := vzn.Serve(ctx, *httpAddr); err != nil {
-				log.Printf("viz server stopped: %v", err)
+			log.Printf("workbench viz on %s", browseURL(addr))
+			// A bind failure here (e.g. the port is already taken by a stray viz
+			// process) previously died silently in this goroutine, leaving the MCP
+			// server up but the browser dark. Make it loud and fatal instead.
+			if err := vzn.Serve(ctx, addr); err != nil {
+				log.Fatalf("viz server failed on %s: %v", addr, err)
 			}
 		}()
 	}
@@ -93,6 +109,23 @@ func main() {
 	if err := srv.Run(ctx, &mcp.StdioTransport{}); err != nil {
 		log.Fatalf("serve: %v", err)
 	}
+}
+
+// browseURL renders a human-clickable URL for a listen address in any of the
+// forms flag accepts: ":7777" (port only), "127.0.0.1:7777", "0.0.0.0:7777".
+// A bare or wildcard host is shown as localhost so the log line is clickable.
+func browseURL(addr string) string {
+	host, port := addr, ""
+	if i := strings.LastIndex(addr, ":"); i >= 0 {
+		host, port = addr[:i], addr[i+1:]
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" || host == "[::]" {
+		host = "localhost"
+	}
+	if port == "" {
+		return "http://" + host
+	}
+	return "http://" + host + ":" + port
 }
 
 func envOr(key, def string) string {

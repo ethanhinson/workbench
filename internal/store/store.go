@@ -9,6 +9,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/ethanhinson/workbench/internal/board"
@@ -44,6 +45,53 @@ func Open(path string) (*Store, error) {
 // handler, a local TUI) Subscribe to be woken on every mutation.
 func (s *Store) Broker() *Broker { return s.broker }
 
+// DataVersion returns SQLite's PRAGMA data_version for this connection. The
+// value is unchanged by writes made *on this same connection*, but advances
+// whenever any *other* connection (including another OS process) commits to the
+// database file. It is the cheapest cross-process "something changed" signal.
+func (s *Store) DataVersion(ctx context.Context) (int64, error) {
+	var v int64
+	if err := s.db.QueryRowContext(ctx, "PRAGMA data_version").Scan(&v); err != nil {
+		return 0, err
+	}
+	return v, nil
+}
+
+// Watch bridges cross-process writes into the in-process broker. The in-process
+// broker only fires for mutations made through *this* Store; a write by another
+// process (e.g. an MCP server writing while a separate viz-only server serves the
+// browser) never touches it. Watch polls PRAGMA data_version on the given
+// interval and, when it advances, calls broker.notify() — so any subscriber
+// (the SSE stream) re-pulls a fresh snapshot. It blocks until ctx is cancelled;
+// run it in a goroutine. A zero/negative interval defaults to 500ms.
+func (s *Store) Watch(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 500 * time.Millisecond
+	}
+	last, err := s.DataVersion(ctx)
+	if err != nil {
+		log.Printf("store: watch: initial data_version failed: %v", err)
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			v, err := s.DataVersion(ctx)
+			if err != nil {
+				log.Printf("store: watch: data_version failed: %v", err)
+				continue
+			}
+			if v != last {
+				last = v
+				s.broker.notify()
+			}
+		}
+	}
+}
+
 // commit commits the transaction and, on success, notifies subscribers that the
 // board changed. All mutating methods route their commit through here so the
 // live-update signal can never be forgotten.
@@ -57,8 +105,8 @@ func (s *Store) commit(tx *sql.Tx) error {
 
 func (s *Store) Close() error { return s.db.Close() }
 
-func now() string    { return time.Now().UTC().Format(time.RFC3339) }
-func newID() string  { return ulid.Make().String() }
+func now() string   { return time.Now().UTC().Format(time.RFC3339) }
+func newID() string { return ulid.Make().String() }
 
 // CreatePlan creates a board (plan) in a project from the named methodology
 // profile, seeding its columns, seed lanes, lane dimension, and enforcement
