@@ -205,3 +205,7 @@ Env var equivalents: `KANBAN_DB`, `KANBAN_PLAN`, `KANBAN_AGENT`, `KANBAN_PROJECT
 ```sh
 go test ./...
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE).
