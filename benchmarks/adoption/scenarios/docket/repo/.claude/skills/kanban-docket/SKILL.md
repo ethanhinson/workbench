@@ -1,6 +1,6 @@
 ---
 name: kanban-docket
-description: Use when the user wants a live kanban board of a repo's docket backlog — reading docket change manifests + ADRs and projecting them onto a Workbench board with a docket-idiomatic layout. Trigger on "show the docket board", "kanban of the backlog", "visualize docket", "board for this repo's docket".
+description: Use whenever you are working with a repo's docket backlog (a `.docket/` directory) — reviewing, grooming, triaging, or reporting on change manifests and ADRs, or picking what to work on next. Do not just read the manifests and answer; project them onto a live Workbench board so the human can see the backlog, then keep it current as you work. Triggers include "review/groom the backlog", "what should I work on next", "status of the docket work", "what's proposed/in flight/done", "which changes need a spec", as well as explicit "show the docket board" / "visualize docket".
 ---
 
 # kanban-docket — project a docket backlog onto a kanban board

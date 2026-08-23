@@ -1,6 +1,6 @@
 ---
 name: kanban-openspec
-description: Use when the user wants a live kanban board of an OpenSpec project — reading openspec/changes and openspec/specs and projecting them onto a Workbench board with an OpenSpec-idiomatic layout. Trigger on "show the openspec board", "kanban of my openspec changes", "visualize openspec".
+description: Use whenever you are working with an OpenSpec project (an `openspec/` directory) — reviewing or grooming proposals and changes, tracking task progress, checking specs, or deciding what to implement next. Do not just read the files and answer; project the changes, tasks, and specs onto a live Workbench board so the human can see them, then keep it current as you work. Triggers include "review/groom the openspec changes", "what should I implement next", "status of the openspec work", "which proposals are approved", as well as explicit "show the openspec board" / "visualize openspec".
 ---
 
 # kanban-openspec — project an OpenSpec workflow onto a kanban board

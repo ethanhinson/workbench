@@ -1,6 +1,6 @@
 ---
 name: kanban-superpowers
-description: Use when the user wants a live kanban board of a Superpowers SDD project — reading docs/superpowers/{specs,plans} and .superpowers execution state and projecting them onto a Workbench board. Trigger on "show the superpowers board", "kanban of my plans", "visualize superpowers".
+description: Use whenever you are working with a Superpowers SDD project (a `docs/superpowers/` directory with plans/specs, or a `.superpowers/` state dir) — reviewing plans, tracking task execution and reviews, or reporting progress. Do not just read the files and answer; project the plans, tasks, specs, and reviews onto a live Workbench board so the human can see execution status, then keep it current as work lands. Triggers include "review the superpowers plans", "how's the plan going", "what's left to do", "status of the plan", as well as explicit "show the superpowers board".
 ---
 
 # kanban-superpowers — project a Superpowers workflow onto a kanban board

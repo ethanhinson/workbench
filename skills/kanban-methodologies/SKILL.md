@@ -1,6 +1,6 @@
 ---
 name: kanban-methodologies
-description: Use to choose how to set up a Workbench board for a project's methodology — an index of the per-tool skills (docket, openspec, superpowers) and the shared agentic-layout model behind them. Trigger on "set up a kanban board for this repo", "which kanban skill", "put my backlog on a board".
+description: Use to pick the right board-setup skill when you are working on a project's backlog, specs, plans, or tasks and it has a methodology footprint (`.docket/`, `openspec/`, or `docs/superpowers/`), but you are not sure which per-tool skill applies. An index over kanban-docket / kanban-openspec / kanban-superpowers / kanban-session plus the shared agentic-layout model. Triggers include "review/groom the backlog", "get this project's work on a board", "which board skill fits this repo", "set up a board for this repo".
 ---
 
 # kanban-methodologies — pick the right board setup skill

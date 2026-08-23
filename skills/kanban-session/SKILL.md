@@ -1,6 +1,6 @@
 ---
 name: kanban-session
-description: Use when the user wants a live kanban board of the work happening in this Claude Code session — driving Workbench directly over MCP so a board is started and items are created/moved/linked as the work progresses. Trigger on "start a board", "track this on the board", "show me a kanban of what we're doing", "put this on the kanban", "glue this session to the board".
+description: Use when you take on a multi-step piece of work in a repo that has NO methodology footprint (no `.docket/` / `openspec/` / `docs/superpowers/`) and want it tracked live on a board — start a Workbench board and create/move/link cards as the work progresses, so the human can watch it. (If the repo has a methodology footprint, prefer the matching kanban-docket/openspec/superpowers skill.) Triggers include "track this work on a board", "let's plan and track this", "start a board for this", "show me a kanban of what we're doing".
 ---
 
 # kanban-session — start a board and drive it live from a Claude Code session
