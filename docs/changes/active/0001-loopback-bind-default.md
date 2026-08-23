@@ -2,7 +2,7 @@
 id: 1
 slug: loopback-bind-default
 title: Bind viz HTTP to 127.0.0.1 by default
-status: proposed
+status: in-progress
 priority: high
 type: fix
 created: 2026-08-23
@@ -16,7 +16,8 @@ plan:
 results:
 trivial: true
 auto_groomable:
-branch:
+branch: feat/loopback-bind-default
+claimed_at: 2026-08-23T21:37:36Z
 pr:
 blocked_by:
 reconciled: false
