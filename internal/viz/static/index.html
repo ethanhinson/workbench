@@ -40,14 +40,17 @@
   .tab .count { font-size:11px; color:var(--muted); margin-left:6px; }
   .stats { display:flex; gap:12px; font-size:12px; color:var(--muted); white-space:nowrap; }
 
-  /* small viewports: tighten the header, let it wrap sensibly, drop secondary bits */
+  /* small viewports: two clean rows — [☰ title … live] then [tabs full width]. */
   @media (max-width: 640px) {
     header { padding:8px 10px 0; gap:8px; }
     header h1 { font-size:14px; }
     .stats { display:none; }              /* total/blocked is secondary on mobile */
     #plan-tag { display:none; }           /* board name is in the sidebar */
-    .spacer { flex-basis:100%; height:0; margin:0; }  /* push tabs onto their own full-width row */
-    .tabs { order:3; width:100%; padding-bottom:0; }
+    #sb-toggle { order:1; }
+    header h1 { order:2; }
+    #live { order:3; margin-left:auto; }  /* pin the live dot to the right of row 1 */
+    .spacer { display:none; }             /* not needed; margin-left:auto right-aligns #live */
+    .tabs { order:4; flex-basis:100%; width:100%; padding-bottom:0; }  /* tabs get their own row */
   }
   /* main row below the header: boards sidebar on the left, current board fills the rest */
   .main { flex:1 1 auto; min-height:0; display:flex; position:relative; }
@@ -189,7 +192,7 @@
   <div class="tabs" id="tabs"></div>
   <div class="spacer"></div>
   <div class="stats" id="stats"></div>
-  <span class="tag" id="live">○</span>
+  <span class="tag" id="live" title="live-update connection status">○</span>
 </header>
 
 <div class="main">
