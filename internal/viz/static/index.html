@@ -26,23 +26,42 @@
   body { margin:0; font:14px/1.4 ui-sans-serif,system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg);
          display:flex; flex-direction:column; height:100vh; overflow:hidden; }
   header { display:flex; align-items:center; gap:10px; padding:8px 16px 0; border-bottom:1px solid var(--line);
-           flex:0 0 auto; background:var(--bg); z-index:5; }
+           flex:0 0 auto; background:var(--bg); z-index:5; flex-wrap:wrap; }
   header > *:not(.tabs) { margin-bottom:8px; } /* keep non-tab items spaced; tabs sit flush on the border */
-  header h1 { font-size:15px; margin:0; font-weight:600; }
-  .tag { font-size:11px; color:var(--muted); border:1px solid var(--line); padding:2px 8px; border-radius:999px; }
+  header h1 { font-size:15px; margin:0; font-weight:600; white-space:nowrap; }
+  .tag { font-size:11px; color:var(--muted); border:1px solid var(--line); padding:2px 8px; border-radius:999px; white-space:nowrap; }
   .spacer { flex:1; }
-  .tabs { display:flex; gap:4px; }
-  .tab { padding:5px 14px; border-radius:8px 8px 0 0; cursor:pointer; color:var(--muted); border:1px solid transparent; font-weight:500; }
+  /* nav tabs: horizontally scrollable so many/long labels never overflow the header */
+  .tabs { display:flex; gap:4px; overflow-x:auto; max-width:100%; scrollbar-width:none; -ms-overflow-style:none; }
+  .tabs::-webkit-scrollbar { display:none; }
+  .tab { padding:5px 14px; border-radius:8px 8px 0 0; cursor:pointer; color:var(--muted); border:1px solid transparent;
+         font-weight:500; white-space:nowrap; flex:0 0 auto; }
   .tab.active { color:var(--fg); background:var(--panel); border-color:var(--line); border-bottom-color:var(--panel); }
   .tab .count { font-size:11px; color:var(--muted); margin-left:6px; }
-  .stats { display:flex; gap:12px; font-size:12px; color:var(--muted); }
+  .stats { display:flex; gap:12px; font-size:12px; color:var(--muted); white-space:nowrap; }
+
+  /* small viewports: tighten the header, let it wrap sensibly, drop secondary bits */
+  @media (max-width: 640px) {
+    header { padding:8px 10px 0; gap:8px; }
+    header h1 { font-size:14px; }
+    .stats { display:none; }              /* total/blocked is secondary on mobile */
+    #plan-tag { display:none; }           /* board name is in the sidebar */
+    .spacer { flex-basis:100%; height:0; margin:0; }  /* push tabs onto their own full-width row */
+    .tabs { order:3; width:100%; padding-bottom:0; }
+  }
   /* main row below the header: boards sidebar on the left, current board fills the rest */
-  .main { flex:1 1 auto; min-height:0; display:flex; }
+  .main { flex:1 1 auto; min-height:0; display:flex; position:relative; }
   .content { flex:1 1 auto; min-width:0; min-height:0; display:flex; flex-direction:column; }
   /* boards sidebar: a persistent list of every board in the db; click to switch */
   .sidebar { flex:0 0 210px; min-height:0; overflow-y:auto; border-right:1px solid var(--line);
              background:#0c0e12; display:flex; flex-direction:column; transition:flex-basis .12s ease; }
   .sidebar.collapsed { flex-basis:0; overflow:hidden; border-right:none; }
+  /* on small viewports the sidebar overlays the board instead of stealing width */
+  @media (max-width: 640px) {
+    .sidebar { position:absolute; top:0; bottom:0; left:0; z-index:10; flex-basis:80vw; max-width:280px;
+               box-shadow:2px 0 12px rgba(0,0,0,.5); transition:transform .15s ease; }
+    .sidebar.collapsed { transform:translateX(-100%); flex-basis:80vw; overflow:hidden; }
+  }
   .sb-head { display:flex; align-items:center; gap:8px; padding:10px 12px 6px; font-size:11px;
              text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
   .sb-head .count { margin-left:auto; }
@@ -115,6 +134,12 @@
   .doc-item.active { background:#12161e; border-left:2px solid #2f81f7; }
   .doc-body { flex:1 1 auto; min-width:0; overflow-y:auto; }
   .doc-body .md { max-height:none; }
+  /* small viewports: doc view stacks (index over document); tighter board padding */
+  @media (max-width: 640px) {
+    .board { padding:8px; }
+    .docview { flex-direction:column; }
+    .doc-list { flex:0 0 auto; max-height:32vh; }
+  }
   .doc-ref { margin-top:10px; font-size:11px; color:var(--muted); }
   .dr-id { color:var(--accent); font-weight:600; font-size:13px; flex:0 0 52px; }
   .dr-title { flex:1 1 auto; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -509,14 +534,19 @@ function switchBoard(id){
   initialLoad(); connect();
 }
 
-// Collapse/expand the sidebar; persist the choice for the session.
+// Collapse/expand the sidebar; persist the choice. On small viewports it defaults
+// collapsed (it overlays the board) and auto-collapses after picking a board.
 (function(){
   const sb = $("#sidebar");
-  if (localStorage.getItem("kb-sidebar")==="collapsed") sb.classList.add("collapsed");
+  const isNarrow = () => window.matchMedia("(max-width: 640px)").matches;
+  const pref = localStorage.getItem("kb-sidebar");
+  if (pref==="collapsed" || (pref===null && isNarrow())) sb.classList.add("collapsed");
   $("#sb-toggle").onclick = ()=>{
     sb.classList.toggle("collapsed");
     localStorage.setItem("kb-sidebar", sb.classList.contains("collapsed")?"collapsed":"open");
   };
+  // After switching boards on a narrow screen, close the overlay so the board shows.
+  sb.addEventListener("click", (e)=>{ if (e.target.closest(".sb-item") && isNarrow()) sb.classList.add("collapsed"); });
 })();
 
 loadBoards();
