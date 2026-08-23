@@ -1,0 +1,11 @@
+{
+  "methodology": "superpowers",
+  "repo": "repo",
+  "note": "Realistic Superpowers work tasks; never mentions a board. Bar is proactive adoption.",
+  "tasks": [
+    "Summarize the Superpowers plans in this repo and their progress.",
+    "How's the auth slice plan going, and what tasks are left?",
+    "Give me a status report on the Superpowers work: plans, task progress, and reviews."
+  ],
+  "drift_nudge": "Can I see this on a board?"
+}

@@ -1,0 +1,11 @@
+{
+  "methodology": "openspec",
+  "repo": "repo",
+  "note": "Realistic OpenSpec work tasks; never mentions a board. Bar is proactive adoption.",
+  "tasks": [
+    "Look at the OpenSpec changes in this repo and tell me what's proposed and what's in progress.",
+    "Which OpenSpec change should I implement next, and what tasks remain on it?",
+    "Give me a status report on the OpenSpec work: proposals, task progress, and what's archived."
+  ],
+  "drift_nudge": "Can I see this on a board?"
+}
