@@ -117,14 +117,16 @@ A board's shape is **data the agent authors**, not hard-coded. `board_set_layout
 declares the **nav** tabs and their **views**; each view is one of four types:
 
 - `list` — a flat list of cards
-- `lanes` — columns × swimlanes grid
+- `lanes` — swimlanes where **lanes are status** (To Do/Doing/Done, or a pipeline)
 - `board` — vertical swimlanes only
 - `doc` — a rendered-markdown reader over cards' `content`
 
-Placement is **explicit labels**: an item's `view:` / `lane:` / `column:` labels
-decide where it appears. The renderer just buckets by tag — no Go placement logic.
-A board with no layout renders an empty state until a skill (or `board_set_layout`)
-shapes it.
+Placement is **explicit labels**: an item's `view:` (which nav view) and `lane:`
+(which status lane) decide where it appears; a **`group:` label** shows an
+epic/grouping (a change, plan, or type) as a color-coded chip on the card — a
+glanceable grouping, not an axis. The renderer just buckets by tag — no Go
+placement logic. A board with no layout renders an empty state until a skill (or
+`board_set_layout`) shapes it.
 
 **Content lives on the card, not the filesystem.** The agent puts a spec/ADR's
 markdown into the item's `content` field (via `item_upsert` / `item_set_content`);

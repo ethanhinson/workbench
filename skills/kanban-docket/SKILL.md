@@ -55,12 +55,11 @@ board_set_layout { board_id, layout: {
     { id: "done",     label: "Done",     view: "done" }
   ],
   views: {
-    "backlog":  { type: "lanes",
-                  lanes:   [{key:"feat",label:"Feature"},{key:"fix",label:"Fix"},{key:"chore",label:"Chore"},{key:"refactor",label:"Refactor"}],
-                  columns: [{key:"needs_spec",label:"Needs Spec"},{key:"in_spec",label:"In Spec"},{key:"build_ready",label:"Build-Ready"}] },
-    "inflight": { type: "lanes",
-                  lanes:   [{key:"spec",label:"Spec"},{key:"build",label:"Build"},{key:"review",label:"Review"}],
-                  columns: [{key:"doing",label:"Doing"},{key:"blocked",label:"Blocked"}] },
+    // lanes = grooming/pipeline STATUS; the change type is a group chip on each card
+    "backlog":  { type: "lanes", group_by: "group",
+                  lanes: [{key:"needs_spec",label:"Needs Spec"},{key:"in_spec",label:"In Spec"},{key:"build_ready",label:"Build-Ready"}] },
+    "inflight": { type: "lanes", group_by: "group",
+                  lanes: [{key:"spec",label:"Spec"},{key:"build",label:"Build"},{key:"review",label:"Review"}] },
     "adrs":     { type: "doc" },
     "done":     { type: "list" }
   }
@@ -75,14 +74,14 @@ frontmatter to **placement labels** so it lands in the right view/lane/column:
 | Manifest field | Card field / label |
 |---|---|
 | `id` + `title` | `title: "#<id> <title>"`, `ext_key: "docket:<id>"` |
-| `type` (feat/fix/chore/refactor) | `lane:<type>` (in Backlog) |
+| `type` (feat/fix/chore/refactor) | **`group:<type>`** (the colored chip, in every view) |
 | `status: done\|killed\|deferred` | `view:done` |
-| proposed, no spec | `view:backlog`, `column:needs_spec` |
-| proposed, spec but no plan | `view:backlog`, `column:in_spec` |
-| proposed, spec+plan | `view:backlog`, `column:build_ready` |
-| `branch:` set (in progress) | `view:inflight`, `lane:build`, `column:doing` |
-| `pr:` set (review) | `view:inflight`, `lane:review`, `column:doing` |
-| `blocked_by:` set | add `column:blocked`; set `spec_ref`/note |
+| proposed, no spec | `view:backlog`, `lane:needs_spec` |
+| proposed, spec but no plan | `view:backlog`, `lane:in_spec` |
+| proposed, spec+plan | `view:backlog`, `lane:build_ready` |
+| `branch:` set (in progress) | `view:inflight`, `lane:build` |
+| `pr:` set (review) | `view:inflight`, `lane:review` |
+| `blocked_by:` set | flag `item_set_blocked` (shows a blocked badge); note the blocker |
 | `spec:` path | read that file; pass its markdown as `content`; set `spec_ref` |
 | `depends_on` / `discovered_from` / `related` | `item_link` from this card to the referenced `docket:<n>` |
 

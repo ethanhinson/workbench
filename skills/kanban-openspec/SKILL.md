@@ -46,22 +46,22 @@ board_set_layout { board_id, layout: {
   ],
   views: {
     "proposals": { type: "lanes",
-                   lanes:   [{key:"draft",label:"Draft"},{key:"approved",label:"Approved"}],
-                   columns: [{key:"has_design",label:"Has Design"},{key:"no_design",label:"No Design"}] },
+                   lanes: [{key:"draft",label:"Draft"},{key:"approved",label:"Approved"}] },
     "tasks":     { type: "lanes",
-                   // one lane per active change; columns track tasks.md checkbox progress
-                   lanes:   [/* {key:<change>,label:<change>} per active change */],
-                   columns: [{key:"todo",label:"To Do"},{key:"doing",label:"Doing"},{key:"done",label:"Done"}] },
+                   // lanes = STATUS (fixed); the change is a group chip on each card
+                   lanes: [{key:"todo",label:"To Do"},{key:"doing",label:"Doing"},{key:"done",label:"Done"}],
+                   group_by: "group" },
     "specs":     { type: "doc" },
     "archive":   { type: "list" }
   }
 }}
 ```
 
-**Ordering matters:** the `tasks` view's lanes are **one per active change**, so
-discover the change folders in Step 1 FIRST, build the `lanes` array from them
-(`{key:<change>, label:<change>}` each), then call `board_set_layout`. A layout set
-before you know the changes would have empty task lanes.
+**Lanes are status, not the change.** The `tasks` view reads like a kanban board —
+To Do / Doing / Done columns — and each card carries a **`group:<change>` chip**
+(color-coded) so you can see which change a task belongs to at a glance. Same for
+`proposals` (lanes = Draft/Approved; the change is the card itself). This layout is
+**fixed** — no per-change discovery needed before `board_set_layout`.
 
 ## Step 4 — hydrate the cards (upsert by ext_key)
 
@@ -72,12 +72,13 @@ For each **change** `openspec/changes/<name>/`, `item_upsert` a proposal card ke
 |---|---|
 | change `<name>` | `title: <name>`, `ext_key: "openspec:<name>"` |
 | `proposal.md` | pass its markdown as `content`; `view:proposals` |
-| `design.md` present? | `lane:draft`/`approved` heuristic; `column:has_design`/`no_design` |
+| `design.md` present? | `lane:approved` else `lane:draft` |
 | in `changes/archive/` | `view:archive` instead |
 
 For each **task** in a change's `tasks.md` (numbered `- [ ] N.M …` checkboxes),
 `item_upsert` a task card keyed `openspec:<name>:task:<N.M>`:
-- `view:tasks`, `lane:<change>` (the change's key), `column:done` if `[x]` else `column:todo`.
+- `view:tasks`, **`lane:done` if `[x]` else `lane:todo`** (lane = status), and
+  **`group:<change>`** so the card shows the change as a colored chip.
 - `item_link` each task card `depends_on` its proposal card.
 
 For each **spec** `openspec/specs/<cap>/spec.md`, upsert `ext_key: "openspec:spec:<cap>"`,

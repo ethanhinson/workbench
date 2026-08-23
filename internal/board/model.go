@@ -112,6 +112,7 @@ var openNamespaces = map[string]bool{
 	"view":   true,
 	"lane":   true,
 	"column": true,
+	"group":  true, // an epic/grouping (e.g. a change or plan) shown as a colored card chip
 }
 
 // Label is a single namespaced label.
@@ -139,7 +140,7 @@ func ValidateLabel(l Label, stageKeys map[string]bool) error {
 	}
 	enum, known := labelEnums[l.NS]
 	if !known {
-		return fmt.Errorf("unknown label namespace %q (allowed: type, priority, spec, stage, agent, area, view, lane, column)", l.NS)
+		return fmt.Errorf("unknown label namespace %q (allowed: type, priority, spec, stage, agent, area, view, lane, column, group)", l.NS)
 	}
 	if !enum[l.Value] {
 		return fmt.Errorf("invalid %s label %q", l.NS, l.Value)

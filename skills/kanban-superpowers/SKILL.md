@@ -47,18 +47,19 @@ board_set_layout { board_id, layout: {
   views: {
     "plans":    { type: "list" },                         // each plan = a story
     "progress": { type: "lanes",
-                  // lanes = the plan being executed; columns = task state
-                  lanes:   [/* {key:<plan-slug>,label:<plan>} per active plan */],
-                  columns: [{key:"todo",label:"To Do"},{key:"doing",label:"Doing"},{key:"done",label:"Done"}] },
+                  // lanes = STATUS (fixed); the plan is a group chip on each card
+                  lanes: [{key:"todo",label:"To Do"},{key:"doing",label:"Doing"},{key:"done",label:"Done"}],
+                  group_by: "group" },
     "specs":    { type: "doc" },
     "reviews":  { type: "list" }
   }
 }}
 ```
 
-**Ordering matters:** the `progress` view's lanes are **one per plan** — list the
-plan files in Step 1 FIRST, build the `lanes` array from their slugs, then call
-`board_set_layout` (a layout set before you know the plans has empty lanes).
+**Lanes are status, not the plan.** The `progress` view reads like a kanban board
+(To Do / Doing / Done), and each task card carries a **`group:<plan>` chip**
+(color-coded) so you see which plan a task belongs to. This layout is **fixed** —
+no per-plan discovery needed before `board_set_layout`.
 
 ## Step 4 — hydrate the cards (upsert by ext_key)
 
@@ -68,8 +69,7 @@ consistently for the plan's `ext_key`, its lane key, and its tasks' keys.
 
 For each **plan** `docs/superpowers/plans/<date>-<name>.md`, `item_upsert`
 `ext_key: "sp:plan:<name>"`: `view:plans`, `content:` the plan markdown,
-`spec_ref:` the path. If it's actively executing, ALSO tag `view:progress`,
-`lane:<name>`.
+`spec_ref:` the path.
 
 **Tasks — how Superpowers plans actually structure them:** a plan's tasks are
 `### Task N: <title>` headings (sometimes sub-numbered `### Task N.M:`), each with
@@ -78,9 +78,10 @@ the step checkboxes — one card per task. **Done-ness is authoritative in
 `.superpowers/sdd/progress.md`**, a ledger of `Task N: complete …` lines; treat a
 task as done if progress.md marks it complete (a `task-N-report.md` file is a
 secondary hint). For each task, `item_upsert`
-`ext_key: "sp:plan:<name>:task:<N>"`: `view:progress`, `lane:<name>`,
-`column:done` if complete else `column:todo`; `item_link depends_on` the plan card;
-pull `task-N-report.md` (if present) into `content`.
+`ext_key: "sp:plan:<name>:task:<N>"`: `view:progress`, **`lane:done` if complete
+else `lane:todo`** (lane = status), and **`group:<name>`** so the card shows its
+plan as a colored chip; `item_link depends_on` the plan card; pull
+`task-N-report.md` (if present) into `content`.
 
 > Multiple plans can coexist under one `.superpowers/sdd/`. `progress.md` and the
 > `task-N-*.md` files belong to the plan **currently executing** — associate them

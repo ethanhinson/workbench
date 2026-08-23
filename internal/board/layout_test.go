@@ -35,7 +35,6 @@ func TestLayoutValidate(t *testing.T) {
 		{"duplicate nav id", func(l *Layout) { l.Nav[1].ID = "flow" }},
 		{"unknown view type", func(l *Layout) { v := l.Views["done"]; v.Type = "grid"; l.Views["done"] = v }},
 		{"lanes view without lanes", func(l *Layout) { v := l.Views["flow"]; v.Lanes = nil; l.Views["flow"] = v }},
-		{"lanes view without columns", func(l *Layout) { v := l.Views["flow"]; v.Columns = nil; l.Views["flow"] = v }},
 		{"duplicate lane key", func(l *Layout) {
 			v := l.Views["flow"]
 			v.Lanes = []LayoutAxis{{Key: "x", Label: "X"}, {Key: "x", Label: "X2"}}

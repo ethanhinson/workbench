@@ -32,18 +32,20 @@ const (
 	ViewDoc   ViewType = "doc"   // rendered-markdown reader over items' content
 )
 
-func (t ViewType) needsLanes() bool   { return t == ViewLanes || t == ViewBoard }
-func (t ViewType) needsColumns() bool { return t == ViewLanes }
+func (t ViewType) needsLanes() bool { return t == ViewLanes || t == ViewBoard }
 
 // LayoutView defines one view. Which of Lanes/Columns are required depends on Type.
 // Include selects which items appear (by default the items tagged view:<the view's
 // own id>); items are then bucketed into Lanes/Columns by their lane:/column: tags.
 type LayoutView struct {
-	Type    ViewType    `json:"type"`
+	Type    ViewType     `json:"type"`
 	Lanes   []LayoutAxis `json:"lanes,omitempty"`
 	Columns []LayoutAxis `json:"columns,omitempty"`
 	Include *ViewInclude `json:"include,omitempty"`
-	Sort    string       `json:"sort,omitempty"` // renderer hint: priority | updated_desc | created | title
+	// GroupBy is the label namespace whose value colors/labels each card as an
+	// epic/group chip (default "group"). Grouping is a glanceable chip, not an axis.
+	GroupBy string `json:"group_by,omitempty"`
+	Sort    string `json:"sort,omitempty"` // renderer hint: priority | updated_desc | created | title
 }
 
 // LayoutAxis is a lane or column: a stable key plus a display label.
@@ -95,9 +97,8 @@ func (lo Layout) Validate() error {
 		if v.Type.needsLanes() && len(v.Lanes) == 0 {
 			return fmt.Errorf("view %q (%s) needs at least one lane", id, v.Type)
 		}
-		if v.Type.needsColumns() && len(v.Columns) == 0 {
-			return fmt.Errorf("view %q (%s) needs at least one column", id, v.Type)
-		}
+		// Columns are optional — a lanes view whose lanes are status doesn't need a
+		// second axis. When present, they must be well-formed.
 		if err := axesUnique(v.Lanes, "lane", id); err != nil {
 			return err
 		}

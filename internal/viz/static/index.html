@@ -114,6 +114,7 @@
                  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
   .badges { display:flex; align-items:center; gap:5px; flex-wrap:wrap; margin-top:6px; }
   .badge { font-size:10px; padding:1px 6px; border-radius:999px; border:1px solid var(--line); color:var(--muted); }
+  .badge.grp { max-width:14ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
   .badge.spec-missing { color:var(--spec-missing); }
   .badge.spec-draft { color:var(--spec-draft); border-color:var(--spec-draft); }
   .badge.spec-approved { color:var(--spec-approved); border-color:var(--spec-approved); }
@@ -249,9 +250,28 @@ function shortRef(it){
 }
 
 // card renders one ticket; colLabel (if any) is shown as a status badge.
-function card(it, colLabel){
+// groupChip renders an item's epic/group (from its group_by label) as a colored
+// chip, so grouping is glanceable without being an axis. Color is stable per value.
+const GROUP_HUES = {};
+function groupHue(v){
+  if (!(v in GROUP_HUES)){
+    let h=0; for (let i=0;i<v.length;i++) h=(h*31 + v.charCodeAt(i))>>>0;
+    GROUP_HUES[v] = h % 360;
+  }
+  return GROUP_HUES[v];
+}
+function groupChip(it, groupBy){
+  const v = labelVal(it, groupBy || "group");
+  if (!v) return "";
+  const hue = groupHue(v);
+  return `<span class="badge grp" style="border-color:hsl(${hue} 55% 45%);color:hsl(${hue} 70% 72%);background:hsl(${hue} 45% 16%)" title="${esc(v)}">${esc(v)}</span>`;
+}
+
+// card renders one ticket. groupBy (a label ns, default "group") drives the group
+// chip; when set, the group replaces the priority slot as the card's lead badge.
+function card(it, groupBy){
   const badges = [
-    colLabel ? `<span class="badge stage">${esc(colLabel)}</span>` : (it.priority?`<span class="badge">${esc(it.priority)}</span>`:""),
+    groupChip(it, groupBy) || (it.priority?`<span class="badge">${esc(it.priority)}</span>`:""),
     specBadge(it.spec_status),
     it.blocked ? `<span class="badge blocked">blocked</span>` : "",
     depChips(it),
@@ -270,11 +290,11 @@ function card(it, colLabel){
 // column: label becomes a per-card status badge + within-lane sort key).
 function renderLanes(navId, vd){
   const items = itemsForView(navId, vd);
-  const colLabel = {}, colOrd = {};
-  (vd.columns||[]).forEach((c,i)=>{ colLabel[c.key]=c.label; colOrd[c.key]=i; });
+  const gb = vd.group_by || "group";
   const byLane = {};
   for (const it of items){ const k = labelVal(it,"lane") || "_unassigned"; (byLane[k] ||= []).push(it); }
-  for (const k in byLane) byLane[k].sort((a,b)=>(colOrd[labelVal(a,"column")]??9)-(colOrd[labelVal(b,"column")]??9) || a.title.localeCompare(b.title));
+  // Sort within a lane by group (so cards of the same epic cluster), then title.
+  for (const k in byLane) byLane[k].sort((a,b)=> (labelVal(a,gb)||"~").localeCompare(labelVal(b,gb)||"~") || a.title.localeCompare(b.title));
 
   const lanes = [...(vd.lanes||[])];
   if (byLane["_unassigned"]) lanes.push({key:"_unassigned", label:"(unassigned)"});
@@ -283,7 +303,7 @@ function renderLanes(navId, vd){
     const list = byLane[lane.key]||[];
     html += `<div class="laneCol">
       <div class="laneHead">${esc(lane.label)}<span class="count">${list.length}</span></div>
-      <div class="laneBody">${ list.length ? list.map(it=>card(it, colLabel[labelVal(it,"column")])).join("") : '<div class="empty">—</div>' }</div>
+      <div class="laneBody">${ list.length ? list.map(it=>card(it, gb)).join("") : '<div class="empty">—</div>' }</div>
     </div>`;
   }
   return html + `</div>`;
@@ -292,16 +312,17 @@ function renderLanes(navId, vd){
 // BOARD: vertical swimlanes only (no column axis).
 function renderBoard(navId, vd){
   const items = itemsForView(navId, vd);
+  const gb = vd.group_by || "group";
   const byLane = {};
   for (const it of items){ const k = labelVal(it,"lane") || "_unassigned"; (byLane[k] ||= []).push(it); }
   const lanes = [...(vd.lanes||[])];
   if (byLane["_unassigned"]) lanes.push({key:"_unassigned", label:"(unassigned)"});
   let html = `<div class="lanes">`;
   for (const lane of lanes){
-    const list = (byLane[lane.key]||[]).sort((a,b)=>a.title.localeCompare(b.title));
+    const list = (byLane[lane.key]||[]).sort((a,b)=> (labelVal(a,gb)||"~").localeCompare(labelVal(b,gb)||"~") || a.title.localeCompare(b.title));
     html += `<div class="laneCol">
       <div class="laneHead">${esc(lane.label)}<span class="count">${list.length}</span></div>
-      <div class="laneBody">${ list.length ? list.map(it=>card(it, "")).join("") : '<div class="empty">—</div>' }</div>
+      <div class="laneBody">${ list.length ? list.map(it=>card(it, gb)).join("") : '<div class="empty">—</div>' }</div>
     </div>`;
   }
   return html + `</div>`;

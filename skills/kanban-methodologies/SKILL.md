@@ -30,14 +30,16 @@ becomes its own project-scoped board).
 1. **`board_start`** a project-scoped board (`project:` = the repo dir) → `board_id`.
 2. **`board_set_layout`** — declare the nav tabs + views. View types:
    - `list` — flat list of cards
-   - `lanes` — columns × swimlanes grid
+   - `lanes` — swimlanes; **lanes are STATUS** (To Do/Doing/Done, or a pipeline)
    - `board` — vertical swimlanes only
    - `doc` — a markdown reader over cards' `content`
 3. **`item_upsert`** each artifact (keyed by a stable `ext_key`), carrying:
    - `content` — the doc markdown you READ from the file (the server never reads
      files; you supply the content)
-   - placement labels — `view:<v>`, `lane:<l>`, `column:<c>` — which decide where
-     the card appears
+   - **`lane:<status>`** — which status lane the card sits in (the working axis)
+   - **`group:<epic>`** — an epic/grouping (a change, plan, or type) shown as a
+     color-coded chip on the card, so grouping is glanceable without an axis
+   - `view:<v>` — which nav view the card appears in
    - `item_link` for dependencies
 4. **Interactive setup** — the layout is a dialogue: propose it, adjust nav/views/
    lanes with the user, re-`board_set_layout` until they're happy.
