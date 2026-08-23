@@ -194,7 +194,7 @@ func kanbanProfile() Profile {
 // docketProfile mirrors docket's change lifecycle (a change ~= one PR). Columns
 // track docket status x readiness; lanes are the change's type (feat/fix/...),
 // which is the natural swim dimension for a docket backlog. Enforcement is light
-// because docket itself owns the real workflow; kanban-mcp is the pane of glass.
+// because docket itself owns the real workflow; Workbench is the pane of glass.
 func docketProfile() Profile {
 	cols := []ColumnDef{
 		{Key: "backlog", Name: "Backlog", Position: 0},          // proposed + needs-brainstorm

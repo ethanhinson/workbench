@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ethanhinson/kanban-mcp/internal/board"
+	"github.com/ethanhinson/workbench/internal/board"
 )
 
 func newTestStore(t *testing.T) (*Store, *board.Plan) {
@@ -15,14 +15,14 @@ func newTestStore(t *testing.T) (*Store, *board.Plan) {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { st.Close() })
-	p, err := st.EnsurePlan(context.Background(), "Test Plan", "", "sdd")
+	p, err := st.CreatePlan(context.Background(), "Test Plan", "", "", "sdd")
 	if err != nil {
-		t.Fatalf("ensure plan: %v", err)
+		t.Fatalf("create plan: %v", err)
 	}
 	return st, p
 }
 
-func TestEnsurePlanSeedsDefaults(t *testing.T) {
+func TestCreatePlanSeedsDefaults(t *testing.T) {
 	st, p := newTestStore(t)
 	ctx := context.Background()
 
@@ -37,8 +37,8 @@ func TestEnsurePlanSeedsDefaults(t *testing.T) {
 		t.Fatalf("unexpected column layout: %+v", cols)
 	}
 
-	// EnsurePlan must be idempotent: second call returns the same plan.
-	p2, err := st.EnsurePlan(ctx, "Ignored", "", "sdd")
+	// CreatePlan is idempotent by (project, name): same name+project returns it.
+	p2, err := st.CreatePlan(ctx, "Test Plan", "", "", "sdd")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestKanbanExpediteBypassesLaneWIP(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	p, err := st.EnsurePlan(context.Background(), "K", "", "kanban")
+	p, err := st.CreatePlan(context.Background(), "K", "", "", "kanban")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,5 +171,243 @@ func TestWIPLimit(t *testing.T) {
 	b, _ := st.CreateItem(ctx, "a1", &board.Item{PlanID: p.ID, Kind: board.KindTask, Title: "b", LaneKey: "shared"})
 	if err := st.MoveItem(ctx, "a1", b.ID, "in_progress", ""); err == nil {
 		t.Fatal("expected WIP limit to block the move")
+	}
+}
+
+// TestCreatePlanByNameIsolation proves many boards coexist in one db, are
+// addressed independently, and CreatePlan is idempotent by name (select, not dup).
+func TestCreatePlanByNameIsolation(t *testing.T) {
+	st, first := newTestStore(t) // seeds "Test Plan"
+	ctx := context.Background()
+
+	a, err := st.CreatePlan(ctx, "Board A", "", "", "sdd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := st.CreatePlan(ctx, "Board B", "", "", "kanban")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.ID == b.ID || a.ID == first.ID {
+		t.Fatal("distinct names must yield distinct boards")
+	}
+
+	// Idempotent by name: re-create "Board A" selects the same row.
+	again, err := st.CreatePlan(ctx, "Board A", "", "", "scrum")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.ID != a.ID {
+		t.Fatalf("CreatePlan by existing name should select, got new id %s", again.ID)
+	}
+
+	// Items on A don't leak to B.
+	st.CreateItem(ctx, "u", &board.Item{PlanID: a.ID, Kind: board.KindTask, Title: "on A", LaneKey: "shared"})
+	itemsB, _ := st.ListItems(ctx, b.ID, Filter{})
+	if len(itemsB) != 0 {
+		t.Fatalf("board B should be empty, got %d", len(itemsB))
+	}
+
+	boards, _ := st.ListPlans(ctx)
+	if len(boards) != 3 {
+		t.Fatalf("want 3 boards (Test Plan + A + B), got %d", len(boards))
+	}
+}
+
+// TestDeletePlanCascades proves deleting a board removes its items, links,
+// labels, and events, leaves other boards untouched, and errors on a bad id.
+func TestDeletePlanCascades(t *testing.T) {
+	st, keep := newTestStore(t)
+	ctx := context.Background()
+
+	victim, _ := st.CreatePlan(ctx, "Victim", "", "", "sdd")
+	i1, _ := st.CreateItem(ctx, "u", &board.Item{PlanID: victim.ID, Kind: board.KindStory, Title: "s1", LaneKey: "shared",
+		Labels: []board.Label{{NS: "priority", Value: "p0"}}})
+	i2, _ := st.CreateItem(ctx, "u", &board.Item{PlanID: victim.ID, Kind: board.KindTask, Title: "t1", LaneKey: "shared"})
+	if err := st.AddLink(ctx, victim.ID, i2.ID, i1.ID, "depends_on"); err != nil {
+		t.Fatal(err)
+	}
+	// An item on the board we keep, to prove isolation.
+	keepItem, _ := st.CreateItem(ctx, "u", &board.Item{PlanID: keep.ID, Kind: board.KindTask, Title: "keep", LaneKey: "shared"})
+
+	if err := st.DeletePlan(ctx, victim.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Board gone.
+	if _, err := st.LoadPlan(ctx, victim.ID); err == nil {
+		t.Fatal("deleted board should not load")
+	}
+	// Its rows gone (query the raw tables).
+	for _, q := range []struct {
+		table, where string
+		arg          string
+	}{
+		{"item", "plan_id", victim.ID},
+		{"link", "plan_id", victim.ID},
+		{"event", "plan_id", victim.ID},
+		{"lane", "plan_id", victim.ID},
+		{"column_def", "plan_id", victim.ID},
+		{"label", "item_id", i1.ID},
+	} {
+		var n int
+		st.db.QueryRowContext(ctx, "SELECT COUNT(1) FROM "+q.table+" WHERE "+q.where+"=?", q.arg).Scan(&n)
+		if n != 0 {
+			t.Fatalf("%s rows for deleted board remain: %d", q.table, n)
+		}
+	}
+	// The kept board is untouched.
+	if _, err := st.LoadPlan(ctx, keep.ID); err != nil {
+		t.Fatalf("kept board should survive: %v", err)
+	}
+	items, _ := st.ListItems(ctx, keep.ID, Filter{})
+	if len(items) != 1 || items[0].ID != keepItem.ID {
+		t.Fatalf("kept board's items should survive, got %+v", items)
+	}
+
+	// Deleting a nonexistent board errors.
+	if err := st.DeletePlan(ctx, "nope"); err == nil {
+		t.Fatal("deleting a missing board should error")
+	}
+}
+
+// TestRenamePlan covers rename, the unique-name clash, same-name no-op, and a
+// missing board.
+func TestRenamePlan(t *testing.T) {
+	st, keep := newTestStore(t)
+	ctx := context.Background()
+	other, _ := st.CreatePlan(ctx, "Other", "", "", "sdd")
+
+	if err := st.RenamePlan(ctx, keep.ID, "Renamed"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := st.LoadPlan(ctx, keep.ID)
+	if got.Name != "Renamed" {
+		t.Fatalf("name not updated, got %q", got.Name)
+	}
+
+	// Renaming to a name another board holds is rejected.
+	if err := st.RenamePlan(ctx, keep.ID, "Other"); err == nil {
+		t.Fatal("expected clash error renaming to an existing name")
+	}
+	// A board may keep its own name (no-op).
+	if err := st.RenamePlan(ctx, other.ID, "Other"); err != nil {
+		t.Fatalf("same-name rename should be a no-op, got: %v", err)
+	}
+	// Empty name and missing board are rejected.
+	if err := st.RenamePlan(ctx, keep.ID, ""); err == nil {
+		t.Fatal("expected error on empty name")
+	}
+	if err := st.RenamePlan(ctx, "nope", "Whatever"); err == nil {
+		t.Fatal("expected error renaming a missing board")
+	}
+}
+
+// TestSetPlanProject covers moving a board between projects, the no-op case, the
+// name-clash rejection in the target project, and a missing board.
+func TestSetPlanProject(t *testing.T) {
+	st, _ := newTestStore(t)
+	ctx := context.Background()
+
+	// "auth" exists in two projects; a third board "auth" in the default project.
+	a, _ := st.CreatePlan(ctx, "auth", "/p/alpha", "", "sdd")
+	st.CreatePlan(ctx, "auth", "/p/beta", "", "sdd") // occupies "auth" in /p/beta
+
+	// Move a from /p/alpha to /p/gamma (free) — allowed.
+	if err := st.SetPlanProject(ctx, a.ID, "/p/gamma"); err != nil {
+		t.Fatalf("move to free project failed: %v", err)
+	}
+	got, _ := st.LoadPlan(ctx, a.ID)
+	if got.Project != "/p/gamma" {
+		t.Fatalf("project not updated, got %q", got.Project)
+	}
+
+	// Moving to a project that already has an "auth" board is rejected.
+	if err := st.SetPlanProject(ctx, a.ID, "/p/beta"); err == nil {
+		t.Fatal("expected clash: /p/beta already has an 'auth' board")
+	}
+	// Still in /p/gamma after the rejected move.
+	if got, _ := st.LoadPlan(ctx, a.ID); got.Project != "/p/gamma" {
+		t.Fatalf("board moved despite clash: %q", got.Project)
+	}
+
+	// Moving to the same project is a no-op.
+	if err := st.SetPlanProject(ctx, a.ID, "/p/gamma"); err != nil {
+		t.Fatalf("same-project move should be a no-op, got: %v", err)
+	}
+	// Missing board errors.
+	if err := st.SetPlanProject(ctx, "nope", "/p/x"); err == nil {
+		t.Fatal("expected error moving a missing board")
+	}
+}
+
+// TestSameNameAcrossProjects proves board names are unique per project, not
+// globally: the same name coexists under different projects and de-dupes within
+// one. (The pre-project migration path was removed; this is the enduring invariant.)
+func TestSameNameAcrossProjects(t *testing.T) {
+	st, _ := newTestStore(t)
+	ctx := context.Background()
+
+	a, err := st.CreatePlan(ctx, "Shared", "/dev/alpha", "", "sdd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := st.CreatePlan(ctx, "Shared", "/dev/beta", "", "sdd")
+	if err != nil {
+		t.Fatalf("same name in a different project must be allowed: %v", err)
+	}
+	if a.ID == b.ID {
+		t.Fatal("same name in different projects must be distinct boards")
+	}
+	// Same (project, name) de-dupes.
+	again, err := st.CreatePlan(ctx, "Shared", "/dev/alpha", "", "sdd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.ID != a.ID {
+		t.Fatalf("CreatePlan by existing (project,name) should select, got %s", again.ID)
+	}
+}
+
+// TestPlanLayoutRoundTrip proves a board has no layout until set, that a valid
+// layout round-trips, that an invalid one is rejected, and a missing board errors.
+func TestPlanLayoutRoundTrip(t *testing.T) {
+	st, p := newTestStore(t)
+	ctx := context.Background()
+
+	// No layout initially.
+	if _, ok, err := st.GetPlanLayout(ctx, p.ID); err != nil || ok {
+		t.Fatalf("fresh board should have no layout (ok=%v err=%v)", ok, err)
+	}
+
+	lo := board.Layout{
+		Nav: []board.NavItem{{ID: "done", Label: "Done", View: "done"}},
+		Views: map[string]board.LayoutView{
+			"done": {Type: board.ViewList},
+		},
+	}
+	if err := st.SetPlanLayout(ctx, p.ID, lo); err != nil {
+		t.Fatalf("set layout: %v", err)
+	}
+	got, ok, err := st.GetPlanLayout(ctx, p.ID)
+	if err != nil || !ok {
+		t.Fatalf("layout should be set now (ok=%v err=%v)", ok, err)
+	}
+	if len(got.Nav) != 1 || got.Nav[0].ID != "done" || got.Views["done"].Type != board.ViewList {
+		t.Fatalf("layout did not round-trip: %+v", got)
+	}
+
+	// Invalid layout (nav points at a missing view) is rejected, leaving the old one.
+	bad := board.Layout{Nav: []board.NavItem{{ID: "x", Label: "X", View: "ghost"}}, Views: map[string]board.LayoutView{}}
+	if err := st.SetPlanLayout(ctx, p.ID, bad); err == nil {
+		t.Fatal("invalid layout should be rejected")
+	}
+	if got2, _, _ := st.GetPlanLayout(ctx, p.ID); got2.Nav[0].ID != "done" {
+		t.Fatal("rejected layout should not overwrite the good one")
+	}
+
+	// Missing board errors.
+	if err := st.SetPlanLayout(ctx, "nope", lo); err == nil {
+		t.Fatal("setting layout on a missing board should error")
 	}
 }

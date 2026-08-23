@@ -1,20 +1,28 @@
--- kanban-mcp schema. One SQLite file == one Plan (the top-level shared board).
+-- kanban-mcp schema. One SQLite file hosts MANY boards (plan rows); an agent
+-- creates/selects a board at runtime via board_start. Every table below is keyed
+-- by plan_id, so a database file is a multi-board container.
 -- Nested model: plan > epic > story > task. Boards are views over a plan.
 
 PRAGMA journal_mode = WAL;      -- concurrent agents: readers don't block the writer
 PRAGMA foreign_keys = ON;
 PRAGMA busy_timeout = 5000;     -- wait rather than fail when another agent holds the write lock
 
--- The single top-level plan this database represents.
+-- Boards. Each row is one board (plan) in this database. A board belongs to a
+-- project (by default a directory path); board names are unique WITHIN a project,
+-- so two projects can each have a board named "auth work". board_start is
+-- idempotent by (project, name) — starting an existing board selects it.
 CREATE TABLE IF NOT EXISTS plan (
     id          TEXT PRIMARY KEY,          -- ulid
     name        TEXT NOT NULL,
+    project     TEXT NOT NULL DEFAULT '',  -- owning project (a directory path by default)
     description TEXT NOT NULL DEFAULT '',
     profile     TEXT NOT NULL DEFAULT 'sdd', -- active methodology profile (sdd|scrum|kanban|custom)
     lane_dim    TEXT NOT NULL DEFAULT 'agent', -- what a swim lane means under this profile
     policies    TEXT NOT NULL DEFAULT '{}',  -- JSON-encoded board.Policies (the enforcement rules)
+    layout      TEXT NOT NULL DEFAULT '',    -- JSON-encoded board.Layout (agent-authored UI); '' = no layout
     created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
+    updated_at  TEXT NOT NULL,
+    UNIQUE (project, name)              -- board names are unique WITHIN a project
 );
 
 -- Workflow columns (stages). Seeded with SDD-opinionated defaults, overridable.
@@ -47,7 +55,8 @@ CREATE TABLE IF NOT EXISTS item (
     parent_id   TEXT REFERENCES item(id) ON DELETE CASCADE,
     kind        TEXT NOT NULL,              -- epic | story | task | bug | spike
     title       TEXT NOT NULL,
-    body        TEXT NOT NULL DEFAULT '',
+    body        TEXT NOT NULL DEFAULT '',   -- short free-text notes
+    content     TEXT NOT NULL DEFAULT '',   -- full doc markdown (spec/ADR/notes) the agent supplied; rendered by a doc view
     column_key  TEXT NOT NULL,              -- current stage
     lane_key    TEXT,                       -- owning swim lane (nullable = unassigned)
     spec_ref    TEXT NOT NULL DEFAULT '',   -- path/URL to the spec doc (SDD)

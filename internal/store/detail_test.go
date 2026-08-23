@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ethanhinson/kanban-mcp/internal/board"
+	"github.com/ethanhinson/workbench/internal/board"
 )
 
 // TestItemDetailWithLinksNoDeadlock guards the MaxOpenConns(1) hazard: resolving
@@ -19,7 +19,7 @@ func TestItemDetailWithLinksNoDeadlock(t *testing.T) {
 	}
 	defer st.Close()
 	ctx := context.Background()
-	p, _ := st.EnsurePlan(ctx, "P", "", "docket")
+	p, _ := st.CreatePlan(ctx, "P", "", "", "docket")
 
 	a, _ := st.CreateItem(ctx, "x", &board.Item{PlanID: p.ID, Kind: board.KindStory, Title: "#1 A", ColumnKey: "backlog", LaneKey: "feat"})
 	b, _ := st.CreateItem(ctx, "x", &board.Item{PlanID: p.ID, Kind: board.KindStory, Title: "#2 B", ColumnKey: "backlog", LaneKey: "feat"})
@@ -31,7 +31,7 @@ func TestItemDetailWithLinksNoDeadlock(t *testing.T) {
 	done := make(chan struct{})
 	var detail board.ItemDetail
 	go func() {
-		detail, err = st.ItemDetail(ctx, p.ID, b.ID, nil)
+		detail, err = st.ItemDetail(ctx, p.ID, b.ID)
 		close(done)
 	}()
 	select {

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ethanhinson/kanban-mcp/internal/board"
-	"github.com/ethanhinson/kanban-mcp/internal/store"
+	"github.com/ethanhinson/workbench/internal/board"
+	"github.com/ethanhinson/workbench/internal/store"
 )
 
 // TestSSEPushesOnMutation proves the store broker -> SSE path: a connected client
@@ -22,7 +22,7 @@ func TestSSEPushesOnMutation(t *testing.T) {
 	}
 	defer st.Close()
 	ctx := context.Background()
-	plan, _ := st.EnsurePlan(ctx, "P", "", "sdd")
+	plan, _ := st.CreatePlan(ctx, "P", "", "", "sdd")
 
 	srv := httptest.NewServer(NewServer(st, plan.ID).Handler())
 	defer srv.Close()

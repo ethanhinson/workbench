@@ -1,4 +1,4 @@
-module github.com/ethanhinson/kanban-mcp
+module github.com/ethanhinson/workbench
 
 go 1.26.5
 

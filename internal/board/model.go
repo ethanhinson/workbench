@@ -28,6 +28,7 @@ func (k Kind) Valid() bool {
 type Plan struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`
+	Project       string `json:"project,omitempty"` // owning project (a directory path by default)
 	Description   string `json:"description,omitempty"`
 	ProfileKey    string `json:"profile"`        // active methodology profile
 	LaneDimension string `json:"lane_dimension"` // what a swim lane means under it
@@ -101,10 +102,17 @@ var labelEnums = map[string]map[string]bool{
 	"stage":    {}, // populated from the plan's columns at validation time
 }
 
-// openNamespaces accept any non-empty slug value.
+// openNamespaces accept any non-empty slug value. view/lane/column drive agentic
+// layout placement — their valid values are defined by the board's own layout
+// (not a global enum), so they're open; the renderer tolerates a value the layout
+// doesn't declare (falls into an unassigned bucket) rather than erroring.
 var openNamespaces = map[string]bool{
-	"agent": true,
-	"area":  true,
+	"agent":  true,
+	"area":   true,
+	"view":   true,
+	"lane":   true,
+	"column": true,
+	"group":  true, // an epic/grouping (e.g. a change or plan) shown as a colored card chip
 }
 
 // Label is a single namespaced label.
@@ -132,7 +140,7 @@ func ValidateLabel(l Label, stageKeys map[string]bool) error {
 	}
 	enum, known := labelEnums[l.NS]
 	if !known {
-		return fmt.Errorf("unknown label namespace %q (allowed: type, priority, spec, stage, agent, area)", l.NS)
+		return fmt.Errorf("unknown label namespace %q (allowed: type, priority, spec, stage, agent, area, view, lane, column, group)", l.NS)
 	}
 	if !enum[l.Value] {
 		return fmt.Errorf("invalid %s label %q", l.NS, l.Value)
@@ -148,6 +156,7 @@ type Item struct {
 	Kind          Kind       `json:"kind"`
 	Title         string     `json:"title"`
 	Body          string     `json:"body,omitempty"`
+	Content       string     `json:"content,omitempty"` // full doc markdown rendered by a doc view
 	ColumnKey     string     `json:"column_key"`
 	LaneKey       string     `json:"lane_key,omitempty"`
 	SpecRef       string     `json:"spec_ref,omitempty"`
@@ -160,17 +169,14 @@ type Item struct {
 	Labels        []Label    `json:"labels,omitempty"`
 	CreatedAt     string     `json:"created_at"`
 	UpdatedAt     string     `json:"updated_at"`
-
-	// Views holds this item's placement per view (keyed by ViewKind), computed at
-	// snapshot time so renderers don't reimplement the taxonomy. Views where the
-	// item is hidden are omitted.
-	Views map[string]ItemPlacement `json:"views,omitempty"`
 }
 
-// ItemPlacement is an item's (lane, column) cell within one view.
-type ItemPlacement struct {
-	Lane   string `json:"lane"`
-	Column string `json:"column"`
+// Link is a first-class dependency between two items (flat board shows these
+// instead of containment). kind: depends_on | related | discovered_from.
+type Link struct {
+	From string `json:"from"` // item id
+	To   string `json:"to"`   // item id
+	Kind string `json:"kind"` // depends_on | related | discovered_from
 }
 
 // Lane is a configurable swim lane; default one per agent.
