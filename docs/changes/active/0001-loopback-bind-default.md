@@ -18,7 +18,7 @@ trivial: true
 auto_groomable:
 branch: feat/loopback-bind-default
 claimed_at: 2026-08-23T21:39:41Z
-pr:
+pr: https://github.com/ethanhinson/workbench/pull/1
 blocked_by:
 reconciled: true
 ---
