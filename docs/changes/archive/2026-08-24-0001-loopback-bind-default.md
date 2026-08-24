@@ -28,7 +28,8 @@ reconciled: true
 <!-- docket:artifacts:start (generated — do not hand-edit) -->
 | Artifact | Link |
 |---|---|
-| Plan | [0001-loopback-bind-default-plan.md](https://github.com/ethanhinson/workbench/blob/feat/loopback-bind-default/docs/superpowers/plans/0001-loopback-bind-default-plan.md) |
+| Plan | [0001-loopback-bind-default-plan.md](https://github.com/ethanhinson/workbench/blob/main/docs/superpowers/plans/0001-loopback-bind-default-plan.md) |
+| PR | [#1](https://github.com/ethanhinson/workbench/pull/1) |
 <!-- docket:artifacts:end -->
 
 ## Why
