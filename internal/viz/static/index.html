@@ -129,6 +129,20 @@
              border-bottom:1px solid var(--line); }
   .doneRow:last-child { border-bottom:none; }
   .doneRow:hover { background:var(--panel2); }
+  /* feed: a reverse-chronological activity stream (time-series, not staged work) */
+  .feed { flex:1 1 auto; min-height:0; overflow-y:auto; display:flex; flex-direction:column;
+          border:1px solid var(--line); border-radius:10px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .feedRow { display:flex; align-items:center; gap:10px; padding:6px 12px; cursor:pointer;
+             border-bottom:1px solid var(--line); font-size:12.5px; }
+  .feedRow:last-child { border-bottom:none; }
+  .feedRow:hover { background:var(--panel2); }
+  .fr-time { color:var(--muted); flex:0 0 62px; font-variant-numeric:tabular-nums; }
+  .fr-dot { flex:0 0 8px; width:8px; height:8px; border-radius:50%; }
+  .fr-cat { flex:0 0 62px; font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  .fr-cat.tool { color:#7fd1ff; }
+  .fr-cat.subagent { color:#c8a2ff; }
+  .fr-cat.session { color:#8fe0a8; }
+  .fr-title { flex:1 1 auto; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   /* doc view: index list on the left, rendered document on the right */
   .docview { flex:1 1 auto; min-height:0; display:flex; gap:12px; }
   .doc-list { flex:0 0 260px; overflow-y:auto; border:1px solid var(--line); border-radius:10px; }
@@ -351,6 +365,39 @@ function listRow(it){
   </div>`;
 }
 
+// FEED: a reverse-chronological activity stream. Unlike lanes/list (which model
+// staged work), a feed models a time-series — events that happened, newest first,
+// each stamped with a time. Built for the activity view: tool calls and subagent
+// lifecycle don't move through stages, they just occur in order. Rows carry the
+// group: label (the session) as a colored chip and the event body as sub-text.
+function renderFeed(navId, vd){
+  const items = itemsForView(navId, vd);
+  if (!items.length) return `<div class="empty">no activity yet</div>`;
+  // Newest first by created_at; fall back to position so ties stay stable.
+  const sorted = [...items].sort((a,b)=>
+    (b.created_at||"").localeCompare(a.created_at||"") || (b.position-a.position));
+  return `<div class="feed">${sorted.map(feedRow).join("")}</div>`;
+}
+function feedRow(it){
+  const grp = labelVal(it, "group");           // the session chip lives in group:
+  const hue = grp ? groupHue(grp) : 210;
+  const cat = labelVal(it, "lane") || "event"; // tool | subagent | session
+  return `<div class="feedRow" onclick="openDrawer('${it.id}')">
+    <span class="fr-time">${esc(feedTime(it.created_at))}</span>
+    <span class="fr-dot" style="background:hsl(${hue} 60% 55%)" title="${esc(grp)}"></span>
+    <span class="fr-cat ${esc(cat)}">${esc(cat)}</span>
+    <span class="fr-title">${esc(it.title)}</span>
+  </div>`;
+}
+// feedTime renders an ISO timestamp as HH:MM:SS (local) for a compact log line.
+function feedTime(iso){
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  const p = n => String(n).padStart(2,"0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
 // DOC: a document reader — a list of the view's items on the left, the selected
 // item's rendered content on the right.
 let DOC_SEL = null;
@@ -402,7 +449,7 @@ function render(){
 
   if (!cur){ $("#board").innerHTML = `<div class="empty">layout has no views</div>`; return; }
   const vd = SNAP.layout.views[cur.view] || {type:"list"};
-  const R = {lanes:renderLanes, board:renderBoard, list:renderList, doc:renderDoc}[vd.type] || renderList;
+  const R = {lanes:renderLanes, board:renderBoard, list:renderList, doc:renderDoc, feed:renderFeed}[vd.type] || renderList;
   $("#board").innerHTML = R(cur.id, vd);
 }
 
@@ -425,13 +472,29 @@ function refRow(r){
 }
 function refLabel(r){ const m=/^#(\d+)/.exec(r.title); return m?"#"+m[1]:(r.ext_key||r.id.slice(0,6)); }
 
+// isActivity reports whether an item is an activity-feed event rather than a work
+// ticket. Activity events carry ticket-shaped defaults (kind:task, priority:p2,
+// spec:missing, column:backlog) that UpsertByExtKey stamps but which are
+// meaningless here — the drawer must not render them as chips.
+function isActivity(it){ return labelVal(it,"view")==="activity"; }
+
 function renderDrawer(d){
   const it = d.item;
   $("#drawer-title").textContent = it.title;
-  let h = `<div class="kind">${it.kind} · ${it.priority} · ${it.column_key}${it.lane_key?' · '+it.lane_key:''}</div>`;
-  h += `<h2>${esc(it.title)}</h2>`;
-  h += `<div class="badges">${specBadge(it.spec_status)}${it.blocked?`<span class="badge blocked">blocked: ${esc(it.blocked_reason||'')}</span>`:''}`;
-  h += (it.labels||[]).map(l=>`<span class="badge">${l.ns}:${l.value}</span>`).join("")+`</div>`;
+  let h;
+  if (isActivity(it)){
+    // Activity events: a log entry, not a ticket. Show harness/session/time, not
+    // spec/priority/column. group: is the session; lane: is the category.
+    const sess = labelVal(it,"group"), cat = labelVal(it,"lane");
+    const meta = [cat, feedTime(it.created_at), sess?('session '+sess):""].filter(Boolean).join(" · ");
+    h = `<div class="kind">${esc(meta)}</div>`;
+    h += `<h2>${esc(it.title)}</h2>`;
+  } else {
+    h = `<div class="kind">${it.kind} · ${it.priority} · ${it.column_key}${it.lane_key?' · '+it.lane_key:''}</div>`;
+    h += `<h2>${esc(it.title)}</h2>`;
+    h += `<div class="badges">${specBadge(it.spec_status)}${it.blocked?`<span class="badge blocked">blocked: ${esc(it.blocked_reason||'')}</span>`:''}`;
+    h += (it.labels||[]).map(l=>`<span class="badge">${l.ns}:${l.value}</span>`).join("")+`</div>`;
+  }
 
   if (d.depends_on&&d.depends_on.length){ h+=`<div class="section-h">Depends on</div><div class="deplist">${d.depends_on.map(refRow).join("")}</div>`; }
   if (d.depended_by&&d.depended_by.length){ h+=`<div class="section-h">Blocks / depended on by</div><div class="deplist">${d.depended_by.map(refRow).join("")}</div>`; }
