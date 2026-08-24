@@ -1,12 +1,6 @@
 # Backlog
 
-**6 changes** — 🟢 1 in progress · 🟡 5 proposed
-
-## 🟢 In progress (1)
-
-| # | Title | Priority | Type | Spec | Branch |
-|---|-------|----------|------|------|--------|
-| [0001](active/0001-loopback-bind-default.md) | Bind viz HTTP to 127.0.0.1 by default | `high` | `fix` | [spec](../) | `feat/loopback-bind-default` |
+**6 changes** — 🟡 5 proposed · ✅ 1 done
 
 ## 🟡 Proposed (5)
 
@@ -20,10 +14,17 @@
 
 ```mermaid
 graph TD
-  0001
   0002
   0003
   0004
   0005
   0006
 ```
+
+<details><summary>✅ Archive — done (1)</summary>
+
+| # | Title | Merged |
+|---|-------|--------|
+| [0001](archive/2026-08-24-0001-loopback-bind-default.md) | Bind viz HTTP to 127.0.0.1 by default | 2026-08-24 |
+
+</details>
