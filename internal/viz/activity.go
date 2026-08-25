@@ -233,14 +233,44 @@ func shortPath(p string) string {
 	return parts[len(parts)-1]
 }
 
+// activityBoard resolves which board an activity event targets, WITHOUT the
+// default-board fallback that browser reads use. Resolution order:
+//
+//	?board=<id>       an explicit board id (validated), else
+//	?project=<path>   the board for that project (its sole/first board), else
+//	""                unresolved — caller drops the event
+//
+// This is what makes activity "scoped to the board the session is working on":
+// the per-project harness hook carries its project, and events land only on that
+// project's board — never on an unrelated default.
+func (s *Server) activityBoard(r *http.Request) string {
+	if id := r.URL.Query().Get("board"); id != "" {
+		if _, err := s.st.LoadPlan(r.Context(), id); err == nil {
+			return id
+		}
+	}
+	if proj := r.URL.Query().Get("project"); proj != "" {
+		if boards, err := s.st.ListPlansForProject(r.Context(), proj); err == nil && len(boards) > 0 {
+			return boards[0].ID
+		}
+	}
+	return ""
+}
+
 // projectActivity upserts one activity event as a card on the board's Activity
 // view. Cards are keyed by a per-event ext_key so the same delivery never
 // duplicates. The card lands in view:activity, laned by session, tagged by the
 // event kind — a live feed of "what the agent is doing".
 func (s *Server) projectActivity(r *http.Request, ev ActivityEvent) error {
-	planID := s.board(r)
+	planID := s.activityBoard(r)
 	if planID == "" {
-		return fmt.Errorf("no board to project onto")
+		// No board explicitly targeted. Unlike a browser GET (which falls back to a
+		// default board so the UI always renders something), activity must NOT
+		// piggyback onto whatever board happens to be default — that pollutes an
+		// unrelated work board with a session's tool-call log. Drop it instead; the
+		// hook is fire-and-forget, so a dropped event is the correct lossy-safe
+		// outcome when the harness didn't say which board it's working on.
+		return nil
 	}
 	// A monotonic, collision-free per-event key: session prefix + a process-local
 	// atomic counter. Each event gets its own card (the store stamps created_at for

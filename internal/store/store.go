@@ -164,7 +164,12 @@ func (s *Store) ListPlansForProject(ctx context.Context, project string) ([]Plan
 }
 
 func (s *Store) listPlans(ctx context.Context, project string, filter bool) ([]PlanSummary, error) {
-	q := `SELECT p.id, p.name, p.project, p.profile, p.created_at, COUNT(i.id)
+	// The count is work tickets only — activity-feed events (a view:activity label)
+	// are a session's tool-call log, not board work, and would inflate the number
+	// with a different kind of thing (a docket board of 6 changes reading "43").
+	q := `SELECT p.id, p.name, p.project, p.profile, p.created_at,
+	             COUNT(i.id) FILTER (WHERE i.id NOT IN (
+	               SELECT item_id FROM label WHERE ns='view' AND value='activity'))
 	      FROM plan p LEFT JOIN item i ON i.plan_id = p.id`
 	var args []any
 	if filter {

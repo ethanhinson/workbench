@@ -85,6 +85,11 @@ func BuildSnapshot(plan Plan, layout Layout, hasLayout bool, cols []ColumnDef, l
 		Links:     links,
 	}
 	for _, it := range items {
+		// Activity-feed events are a session's tool-call log, not board work — keep
+		// them out of the work counts the header shows (see Item.IsActivity).
+		if it.IsActivity() {
+			continue
+		}
 		snap.Stats.TotalItems++
 		if it.Blocked {
 			snap.Stats.Blocked++
