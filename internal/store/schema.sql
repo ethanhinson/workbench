@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS plan (
     name        TEXT NOT NULL,
     project     TEXT NOT NULL DEFAULT '',  -- owning project (a directory path by default)
     description TEXT NOT NULL DEFAULT '',
-    profile     TEXT NOT NULL DEFAULT 'sdd', -- active methodology profile (sdd|scrum|kanban|custom)
+    profile     TEXT NOT NULL DEFAULT 'sdd', -- active methodology profile (sdd|scrum|kanban|docket|openspec|superpowers|custom)
     lane_dim    TEXT NOT NULL DEFAULT 'agent', -- what a swim lane means under this profile
     policies    TEXT NOT NULL DEFAULT '{}',  -- JSON-encoded board.Policies (the enforcement rules)
     layout      TEXT NOT NULL DEFAULT '',    -- JSON-encoded board.Layout (agent-authored UI); '' = no layout
@@ -110,3 +110,16 @@ CREATE TABLE IF NOT EXISTS event (
 );
 
 CREATE INDEX IF NOT EXISTS idx_event_item ON event(item_id, at);
+
+-- Session→board routing for the harness activity feed. No harness reliably hands a
+-- spawned MCP server its own session id, so the mapping cannot be written from the
+-- MCP side; instead the shared viz process LEARNS it from the activity stream: the
+-- first event for a session resolves a board from the payload's project/cwd path
+-- and records it here, and subsequent events for that session route by session_id
+-- (O(1), and stable even once the project context is gone). Harness-agnostic —
+-- session_id is the normalized key regardless of the harness's native field name.
+CREATE TABLE IF NOT EXISTS session_board (
+    session_id TEXT PRIMARY KEY,
+    board_id   TEXT NOT NULL REFERENCES plan(id) ON DELETE CASCADE,
+    updated_at TEXT NOT NULL
+);

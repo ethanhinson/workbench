@@ -25,7 +25,7 @@ type Server struct {
 }
 
 // New builds an MCP server over the given db. agentID identifies the agent driving
-// this instance. profileKey is the default methodology (sdd|scrum|kanban|...) used
+// this instance. profileKey is the default methodology (sdd|scrum|kanban|docket|openspec|superpowers|...) used
 // for any board_start that omits a profile. defaultProject is the project boards
 // land in when board_start doesn't name one — by default the server's working
 // directory, so one shared db groups boards by project.
@@ -77,7 +77,7 @@ func (s *Server) register(srv *mcp.Server) {
 			"back its board_id. This is the entry point — call it first, then pass the returned board_id to " +
 			"every other tool. A board belongs to a project (a directory path); pass project (e.g. your " +
 			"$CLAUDE_PROJECT_DIR) to group this session's boards under it, or omit it to use the server's " +
-			"working directory. Optionally pick a methodology profile (sdd|scrum|kanban). Idempotent by " +
+			"working directory. Optionally pick a methodology profile (sdd|scrum|kanban|docket|openspec|superpowers). Idempotent by " +
 			"(project, name), so re-starting the same name in the same project re-selects the same board.",
 	}, s.boardStart)
 
@@ -206,7 +206,7 @@ func (s *Server) register(srv *mcp.Server) {
 
 type boardStartIn struct {
 	Name    string `json:"name" jsonschema:"human name for the board, e.g. this session's deliverable"`
-	Profile string `json:"profile,omitempty" jsonschema:"methodology profile sdd|scrum|kanban; defaults to the server default"`
+	Profile string `json:"profile,omitempty" jsonschema:"methodology profile sdd|scrum|kanban|docket|openspec|superpowers; defaults to the server default"`
 	Project string `json:"project,omitempty" jsonschema:"project this board belongs to (a directory path); defaults to the working directory. Pass your project root, e.g. $CLAUDE_PROJECT_DIR, to group this session's boards under it"`
 }
 

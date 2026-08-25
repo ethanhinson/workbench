@@ -188,6 +188,41 @@ func (s *Store) GetPlanByName(ctx context.Context, project, name string) (*board
 	return &p, nil
 }
 
+// BoardForSession returns the board a harness session is mapped to, and whether a
+// mapping exists. This is the fast path for activity routing: once learned, every
+// subsequent event for the session resolves in one indexed lookup.
+func (s *Store) BoardForSession(ctx context.Context, sessionID string) (string, bool) {
+	if sessionID == "" {
+		return "", false
+	}
+	var boardID string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT board_id FROM session_board WHERE session_id=?`, sessionID).Scan(&boardID)
+	if err != nil {
+		return "", false
+	}
+	// The board may have been deleted since (cascade removes the row, but guard the
+	// race): a stale mapping resolves to nothing rather than a dangling id.
+	if _, err := s.LoadPlan(ctx, boardID); err != nil {
+		return "", false
+	}
+	return boardID, true
+}
+
+// RecordSessionBoard learns/refreshes a session→board mapping. Idempotent: the same
+// session re-binding to the same board just bumps updated_at. Called by the viz when
+// it first resolves a board for an unmapped session (see activity routing).
+func (s *Store) RecordSessionBoard(ctx context.Context, sessionID, boardID string) error {
+	if sessionID == "" || boardID == "" {
+		return fmt.Errorf("RecordSessionBoard requires session_id and board_id")
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO session_board(session_id, board_id, updated_at) VALUES(?,?,?)
+		 ON CONFLICT(session_id) DO UPDATE SET board_id=excluded.board_id, updated_at=excluded.updated_at`,
+		sessionID, boardID, now())
+	return err
+}
+
 // PlanSummary is a lightweight board listing entry (for board_list / a UI picker).
 type PlanSummary struct {
 	ID         string `json:"id"`
@@ -212,7 +247,12 @@ func (s *Store) ListPlansForProject(ctx context.Context, project string) ([]Plan
 }
 
 func (s *Store) listPlans(ctx context.Context, project string, filter bool) ([]PlanSummary, error) {
-	q := `SELECT p.id, p.name, p.project, p.profile, p.created_at, COUNT(i.id)
+	// The count is work tickets only — activity-feed events (a view:activity label)
+	// are a session's tool-call log, not board work, and would inflate the number
+	// with a different kind of thing (a docket board of 6 changes reading "43").
+	q := `SELECT p.id, p.name, p.project, p.profile, p.created_at,
+	             COUNT(i.id) FILTER (WHERE i.id NOT IN (
+	               SELECT item_id FROM label WHERE ns='view' AND value='activity'))
 	      FROM plan p LEFT JOIN item i ON i.plan_id = p.id`
 	var args []any
 	if filter {

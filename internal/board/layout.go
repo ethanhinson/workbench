@@ -30,6 +30,7 @@ const (
 	ViewLanes ViewType = "lanes" // columns × swimlanes grid
 	ViewBoard ViewType = "board" // vertical swimlanes only (no column axis)
 	ViewDoc   ViewType = "doc"   // rendered-markdown reader over items' content
+	ViewFeed  ViewType = "feed"  // reverse-chronological activity stream (time-series)
 )
 
 func (t ViewType) needsLanes() bool { return t == ViewLanes || t == ViewBoard }
@@ -90,9 +91,9 @@ func (lo Layout) Validate() error {
 	}
 	for id, v := range lo.Views {
 		switch v.Type {
-		case ViewList, ViewLanes, ViewBoard, ViewDoc:
+		case ViewList, ViewLanes, ViewBoard, ViewDoc, ViewFeed:
 		default:
-			return fmt.Errorf("view %q: unknown type %q (want list|lanes|board|doc)", id, v.Type)
+			return fmt.Errorf("view %q: unknown type %q (want list|lanes|board|doc|feed)", id, v.Type)
 		}
 		if v.Type.needsLanes() && len(v.Lanes) == 0 {
 			return fmt.Errorf("view %q (%s) needs at least one lane", id, v.Type)

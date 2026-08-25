@@ -22,7 +22,7 @@ type Snapshot struct {
 	Stats         SnapshotStats `json:"stats"`
 }
 
-const SnapshotSchemaVersion = 4
+const SnapshotSchemaVersion = 5
 
 // SnapshotPlan carries the methodology binding so a renderer can label the axes
 // correctly ("lane = agent" vs "lane = epic" vs "lane = class of service").
@@ -54,11 +54,8 @@ type LinkedRef struct {
 
 // SnapshotStats are cheap roll-ups a renderer can show without recomputing.
 type SnapshotStats struct {
-	TotalItems   int            `json:"total_items"`
-	Blocked      int            `json:"blocked"`
-	ByColumn     map[string]int `json:"by_column"`
-	ByLane       map[string]int `json:"by_lane"`
-	BySpecStatus map[string]int `json:"by_spec_status"`
+	TotalItems int `json:"total_items"`
+	Blocked    int `json:"blocked"`
 }
 
 // BuildSnapshot assembles a Snapshot from already-loaded board data. Keeping it a
@@ -86,19 +83,14 @@ func BuildSnapshot(plan Plan, layout Layout, hasLayout bool, cols []ColumnDef, l
 		Lanes:     lanes,
 		Items:     items,
 		Links:     links,
-		Stats: SnapshotStats{
-			ByColumn: map[string]int{}, ByLane: map[string]int{}, BySpecStatus: map[string]int{},
-		},
 	}
 	for _, it := range items {
-		lane := it.LaneKey
-		if lane == "" {
-			lane = "shared"
+		// Activity-feed events are a session's tool-call log, not board work — keep
+		// them out of the work counts the header shows (see Item.IsActivity).
+		if it.IsActivity() {
+			continue
 		}
 		snap.Stats.TotalItems++
-		snap.Stats.ByColumn[it.ColumnKey]++
-		snap.Stats.ByLane[lane]++
-		snap.Stats.BySpecStatus[string(it.SpecStatus)]++
 		if it.Blocked {
 			snap.Stats.Blocked++
 		}

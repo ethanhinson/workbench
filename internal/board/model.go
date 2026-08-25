@@ -171,6 +171,18 @@ type Item struct {
 	UpdatedAt     string     `json:"updated_at"`
 }
 
+// IsActivity reports whether this item is a harness activity-feed event (a
+// view:activity label) rather than a work ticket. Activity events are a session's
+// tool-call log projected onto the board; they're excluded from work counts.
+func (it Item) IsActivity() bool {
+	for _, l := range it.Labels {
+		if l.NS == "view" && l.Value == "activity" {
+			return true
+		}
+	}
+	return false
+}
+
 // Link is a first-class dependency between two items (flat board shows these
 // instead of containment). kind: depends_on | related | discovered_from.
 type Link struct {

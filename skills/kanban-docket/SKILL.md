@@ -37,9 +37,12 @@ git -C "<repo>" archive "$BR" docs | tar -x -C "$TMP"   # DOCS = $TMP/docs
 ## Step 2 — start the board (project-scoped)
 
 ```
-board_start { name: "<repo>: docket backlog", project: "<repo-abs-path>" }
+board_start { name: "<repo>: docket backlog", project: "<repo-abs-path>", profile: "docket" }
 ```
 Keep the returned `board_id`. The project groups this board under the repo in the UI.
+**Pass `profile: "docket"`** — it binds the docket lifecycle columns, the change-type
+lane dimension, and the docket gates. Omitting it falls back to the `sdd` profile,
+which mislabels the board (e.g. a stray `spec:missing` badge on every card).
 
 ## Step 3 — design the docket layout, then set it
 

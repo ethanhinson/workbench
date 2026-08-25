@@ -46,7 +46,7 @@ session's boards are grouped under it rather than the server's cwd.
 
 | Tool | Use it to |
 |---|---|
-| `board_start` | **Start here.** Create/select a board by `(project, name)` → returns `board_id`. Optional `project` (dir path, defaults to cwd) + `profile` (sdd\|scrum\|kanban). Idempotent per (project, name). |
+| `board_start` | **Start here.** Create/select a board by `(project, name)` → returns `board_id`. Optional `project` (dir path, defaults to cwd) + `profile` (sdd\|scrum\|kanban\|docket\|openspec\|superpowers; a session board is usually `sdd`). Idempotent per (project, name). |
 | `board_list` | List boards (id, name, project, profile, item count); pass `project` to list just one project's boards. |
 | `board_delete` | Delete a board (`board_id`) and everything on it — irreversible. Clean up throwaway/finished boards. |
 | `board_rename` | Rename a board (`board_id`, `name`) — names are unique within a project. |

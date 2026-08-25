@@ -73,6 +73,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/board", s.handleBoard)
 	mux.HandleFunc("/api/stream", s.handleStream)
 	mux.HandleFunc("/api/item/", s.handleItem)
+	mux.HandleFunc("/api/activity", s.handleActivity)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))

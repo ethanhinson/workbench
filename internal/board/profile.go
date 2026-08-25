@@ -110,7 +110,7 @@ func (p Profile) isExempt(laneKey string) bool {
 
 // Profiles returns the built-in methodology presets keyed by Key.
 func Profiles() map[string]Profile {
-	presets := []Profile{sddProfile(), scrumProfile(), kanbanProfile(), docketProfile()}
+	presets := []Profile{sddProfile(), scrumProfile(), kanbanProfile(), docketProfile(), openspecProfile(), superpowersProfile()}
 	m := make(map[string]Profile, len(presets))
 	for _, p := range presets {
 		m[p.Key] = p
@@ -213,6 +213,47 @@ func docketProfile() Profile {
 		LaneDimension: "type", // swim lane = docket change type (feat/fix/chore/...)
 		Columns:       cols,
 		Policies:      Policies{}, // no gates: docket is the source of truth for its own rules
+	}
+}
+
+// openspecProfile mirrors OpenSpec's model: changes carry a proposal (draft until a
+// design.md exists, then approved) and a tasks.md checklist. Columns track task
+// progress; the swim lane is the change the work belongs to. Like docket, OpenSpec
+// owns its own workflow — Workbench is the pane of glass — so enforcement is empty
+// and spec maturity is projected through lanes (draft/approved), not spec_status.
+func openspecProfile() Profile {
+	cols := []ColumnDef{
+		{Key: "todo", Name: "To Do", Position: 0},
+		{Key: "doing", Name: "Doing", Position: 1},
+		{Key: "done", Name: "Done", Position: 2, IsDone: true},
+	}
+	return Profile{
+		Key:           "openspec",
+		Name:          "OpenSpec (imported)",
+		Description:   "Maps an OpenSpec project (proposals, tasks, specs under openspec/) into the kanban board.",
+		LaneDimension: "change", // swim lane = the OpenSpec change the work belongs to
+		Columns:       cols,
+		Policies:      Policies{}, // no gates: OpenSpec is the source of truth for its own rules
+	}
+}
+
+// superpowersProfile mirrors Superpowers SDD: plans decompose into tasks whose
+// done-ness is authoritative in .superpowers/sdd/progress.md. Columns track task
+// progress; the swim lane is the plan. Like docket/openspec, the methodology owns
+// its workflow, so enforcement is empty and status is projected through lanes.
+func superpowersProfile() Profile {
+	cols := []ColumnDef{
+		{Key: "todo", Name: "To Do", Position: 0},
+		{Key: "doing", Name: "Doing", Position: 1},
+		{Key: "done", Name: "Done", Position: 2, IsDone: true},
+	}
+	return Profile{
+		Key:           "superpowers",
+		Name:          "Superpowers (imported)",
+		Description:   "Maps a Superpowers SDD project (plans, tasks, specs, reviews) into the kanban board.",
+		LaneDimension: "plan", // swim lane = the Superpowers plan the work belongs to
+		Columns:       cols,
+		Policies:      Policies{}, // no gates: Superpowers is the source of truth for its own rules
 	}
 }
 
