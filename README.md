@@ -138,11 +138,6 @@ labels and content, links, stats), served at `GET /api/board` and pushed over
 Server-Sent Events at `GET /api/stream` on every change. The bundled single-page app
 is one consumer; the same contract drives a custom renderer or a static export.
 
-```sh
-# browse boards in a database without an agent
-workbench --db ~/.workbench/boards.db --viz-only --http :7777
-```
-
 
 ## Tools
 
