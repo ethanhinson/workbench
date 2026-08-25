@@ -1,13 +1,18 @@
 # Backlog
 
-**8 changes** — 🟡 5 proposed · ✅ 3 done
+**8 changes** — 🔵 1 in flight · 🟡 4 proposed · ✅ 3 done
 
-## 🟡 Proposed (5)
+## 🔵 In Flight (1)
+
+| # | Title | Priority | Type | PR |
+|---|-------|----------|------|----|
+| [0003](active/0003-package-distribution.md) | Package distribution — release binaries (brew / npm deferred) | `medium` | `chore` | [#5](https://github.com/ethanhinson/workbench/pull/5) |
+
+## 🟡 Proposed (4)
 
 | # | Title | Priority | Type | Readiness |
 |---|-------|----------|------|-----------|
 | [0002](active/0002-workbench-init-onboarding.md) | workbench init — one-command onboarding | `high` | `feat` | needs-brainstorm |
-| [0003](active/0003-package-distribution.md) | Package distribution — brew / npm | `medium` | `chore` | build-ready |
 | [0004](active/0004-reposition-observability.md) | Reposition docs — observability, not another task tracker | `high` | `docs` | needs-brainstorm |
 | [0005](active/0005-strengthen-sync-reliability.md) | Strengthen sync — session-live toward reliable | `medium` | `refactor` | needs-brainstorm |
 | [0006](active/0006-layouts-beyond-kanban.md) | Layouts beyond kanban — generic visual substrate | `low` | `feat` | needs-brainstorm |
@@ -15,7 +20,6 @@
 ```mermaid
 graph TD
   0002
-  0003
   0004
   0005
   0006
