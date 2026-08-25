@@ -2,7 +2,7 @@
 id: 7
 slug: drop-viz-only-doc
 title: Drop the stale --viz-only browse snippet from README
-status: proposed
+status: done
 priority: low
 type: docs
 created: 2026-08-25
@@ -16,8 +16,8 @@ plan:
 results:
 trivial: true
 auto_groomable:
-branch:
-pr:
+branch: feat/0007-drop-viz-only-doc
+pr: https://github.com/ethanhinson/workbench/pull/3
 blocked_by:
 reconciled: false
 ---
@@ -47,3 +47,9 @@ still documents `--viz-only` as the way to "browse boards without an agent"
 <!-- none — mechanical doc deletion -->
 
 ## Reconcile log
+
+### 2026-08-25
+
+Implemented as a single doc deletion on `feat/0007-drop-viz-only-doc`; PR #3
+squash-merged to `main` (`56289c9`). The stale `--viz-only` browse snippet is gone
+from README. Archived to done.
