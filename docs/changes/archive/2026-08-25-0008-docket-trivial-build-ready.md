@@ -2,7 +2,7 @@
 id: 8
 slug: docket-trivial-build-ready
 title: kanban-docket — map trivial:true to Build-Ready lane
-status: proposed
+status: done
 priority: medium
 type: fix
 created: 2026-08-25
@@ -16,8 +16,8 @@ plan:
 results:
 trivial: true
 auto_groomable:
-branch:
-pr:
+branch: feat/0008-docket-trivial-build-ready
+pr: https://github.com/ethanhinson/workbench/pull/4
 blocked_by:
 reconciled: false
 ---
@@ -51,3 +51,9 @@ sitting in Needs Spec when it was actually build-ready).
 <!-- none — one-line doc rule addition -->
 
 ## Reconcile log
+
+### 2026-08-25
+
+Implemented as a one-line mapping-table addition on
+`feat/0008-docket-trivial-build-ready`; PR #4 squash-merged to `main` (`ca76ad2`).
+`trivial: true` changes now map to `lane:build_ready`. Archived to done.
