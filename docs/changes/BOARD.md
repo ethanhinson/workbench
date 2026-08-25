@@ -1,6 +1,6 @@
 # Backlog
 
-**6 changes** — 🟡 5 proposed · ✅ 1 done
+**8 changes** — 🟡 5 proposed · ✅ 3 done
 
 ## 🟡 Proposed (5)
 
@@ -21,10 +21,12 @@ graph TD
   0006
 ```
 
-<details><summary>✅ Archive — done (1)</summary>
+<details><summary>✅ Archive — done (3)</summary>
 
 | # | Title | Merged |
 |---|-------|--------|
+| [0008](archive/2026-08-25-0008-docket-trivial-build-ready.md) | kanban-docket — map trivial:true to Build-Ready lane | 2026-08-25 |
+| [0007](archive/2026-08-25-0007-drop-viz-only-doc.md) | Drop the stale --viz-only browse snippet from README | 2026-08-25 |
 | [0001](archive/2026-08-24-0001-loopback-bind-default.md) | Bind viz HTTP to 127.0.0.1 by default | 2026-08-24 |
 
 </details>
