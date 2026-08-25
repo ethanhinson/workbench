@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS plan (
     name        TEXT NOT NULL,
     project     TEXT NOT NULL DEFAULT '',  -- owning project (a directory path by default)
     description TEXT NOT NULL DEFAULT '',
-    profile     TEXT NOT NULL DEFAULT 'sdd', -- active methodology profile (sdd|scrum|kanban|custom)
+    profile     TEXT NOT NULL DEFAULT 'sdd', -- active methodology profile (sdd|scrum|kanban|docket|openspec|superpowers|custom)
     lane_dim    TEXT NOT NULL DEFAULT 'agent', -- what a swim lane means under this profile
     policies    TEXT NOT NULL DEFAULT '{}',  -- JSON-encoded board.Policies (the enforcement rules)
     layout      TEXT NOT NULL DEFAULT '',    -- JSON-encoded board.Layout (agent-authored UI); '' = no layout

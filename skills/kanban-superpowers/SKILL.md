@@ -29,8 +29,11 @@ Confirm `<repo>/docs/superpowers/` exists (specs/ and/or plans/). Note any
 ## Step 2 — start the board
 
 ```
-board_start { name: "<repo>: superpowers", project: "<repo-abs-path>" }
+board_start { name: "<repo>: superpowers", project: "<repo-abs-path>", profile: "superpowers" }
 ```
+**Pass `profile: "superpowers"`** — it binds the task-progress columns and the plan
+lane dimension. Omitting it falls back to the `sdd` profile, which mislabels the
+board (sdd lifecycle columns + a stray `spec:missing` badge on every card).
 
 ## Step 3 — design the layout, then set it
 
