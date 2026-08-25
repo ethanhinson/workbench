@@ -91,15 +91,96 @@ func TestActivityRoutesByProject(t *testing.T) {
 	if n := workCount(t, st, plan.ID); n != 0 {
 		t.Fatalf("activity event counted as work: got %d, want 0", n)
 	}
-	// It should still exist on the board (as an activity item).
-	items, _ := st.ListItems(ctx, plan.ID, store.Filter{})
-	got := 0
+	if got := activityCount(t, st, plan.ID); got != 1 {
+		t.Fatalf("expected 1 activity item on the project board, got %d", got)
+	}
+}
+
+func activityCount(t *testing.T, st *store.Store, planID string) int {
+	t.Helper()
+	items, _ := st.ListItems(context.Background(), planID, store.Filter{})
+	n := 0
 	for _, it := range items {
 		if it.IsActivity() {
-			got++
+			n++
 		}
 	}
-	if got != 1 {
-		t.Fatalf("expected 1 activity item on the project board, got %d", got)
+	return n
+}
+
+func postJSON(t *testing.T, srv *httptest.Server, query, body string) {
+	t.Helper()
+	resp, err := http.Post(srv.URL+"/api/activity"+query, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		t.Fatalf("activity POST status %d", resp.StatusCode)
+	}
+}
+
+// Each supported harness's NATIVE hook payload — with its own session-id and
+// project field names — must route to the project board via the same seam. This is
+// the harness-agnostic contract: the server normalizes on ingest.
+func TestNativeHookRoutingByHarness(t *testing.T) {
+	cases := []struct{ name, body string }{
+		{"claude", `{"hook_event_name":"PostToolUse","session_id":"c1","cwd":"/proj/x","tool_name":"Bash","tool_input":{"command":"go test"}}`},
+		{"codex", `{"hook_event_name":"PostToolUse","session_id":"o1","cwd":"/proj/x","tool_name":"apply_patch"}`},
+		{"cursor", `{"hook_event_name":"afterShellExecution","conversation_id":"u1","workspace_roots":["/proj/x"],"tool_name":"shell"}`},
+		{"grok", `{"hookEventName":"PostToolUse","sessionId":"g1","workspaceRoot":"/proj/x","toolName":"Bash"}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			st, _ := store.Open(t.TempDir() + "/a.db")
+			defer st.Close()
+			plan, _ := st.CreatePlan(context.Background(), "P", "/proj/x", "", "docket")
+			srv := httptest.NewServer(NewServer(st, "").Handler())
+			defer srv.Close()
+
+			postJSON(t, srv, "", c.body) // no query — project must come from the payload
+			if got := activityCount(t, st, plan.ID); got != 1 {
+				t.Fatalf("%s: expected 1 activity item routed by payload project, got %d", c.name, got)
+			}
+		})
+	}
+}
+
+// The first event for a session seeds session→board from its project; subsequent
+// events route by the learned mapping even when they carry NO project field.
+func TestActivitySessionLearningSticks(t *testing.T) {
+	st, _ := store.Open(t.TempDir() + "/a.db")
+	defer st.Close()
+	ctx := context.Background()
+	plan, _ := st.CreatePlan(ctx, "P", "/proj/x", "", "docket")
+	srv := httptest.NewServer(NewServer(st, "").Handler())
+	defer srv.Close()
+
+	// First event carries the project → seeds the map.
+	postJSON(t, srv, "", `{"hook_event_name":"PostToolUse","session_id":"s9","cwd":"/proj/x","tool_name":"Bash"}`)
+	if _, ok := st.BoardForSession(ctx, "s9"); !ok {
+		t.Fatal("session s9 was not learned after its first project-bearing event")
+	}
+	// Second event has NO project — must still land via the learned mapping.
+	postJSON(t, srv, "", `{"hook_event_name":"PostToolUse","session_id":"s9","tool_name":"Grep"}`)
+	if got := activityCount(t, st, plan.ID); got != 2 {
+		t.Fatalf("expected 2 activity items (learned routing), got %d", got)
+	}
+}
+
+// When a project has multiple boards, activity seeds to the most recently created.
+func TestActivityMultiBoardPicksNewest(t *testing.T) {
+	st, _ := store.Open(t.TempDir() + "/a.db")
+	defer st.Close()
+	ctx := context.Background()
+	st.CreatePlan(ctx, "old", "/proj/x", "", "docket")
+	newest, _ := st.CreatePlan(ctx, "new", "/proj/x", "", "sdd")
+	srv := httptest.NewServer(NewServer(st, "").Handler())
+	defer srv.Close()
+
+	postJSON(t, srv, "", `{"hook_event_name":"PostToolUse","session_id":"m1","cwd":"/proj/x","tool_name":"Bash"}`)
+	got, ok := st.BoardForSession(ctx, "m1")
+	if !ok || got != newest.ID {
+		t.Fatalf("multi-board project: session mapped to %q, want newest %q", got, newest.ID)
 	}
 }
