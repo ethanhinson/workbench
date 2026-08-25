@@ -79,6 +79,7 @@ frontmatter to **placement labels** so it lands in the right view/lane/column:
 | `id` + `title` | `title: "#<id> <title>"`, `ext_key: "docket:<id>"` |
 | `type` (feat/fix/chore/refactor) | **`group:<type>`** (the colored chip, in every view) |
 | `status: done\|killed\|deferred` | `view:done` |
+| `trivial: true` (proposed, no branch/pr) | `view:backlog`, `lane:build_ready` — the manifest body *is* the spec; a trivial change is build-ready and skips spec/plan |
 | proposed, no spec | `view:backlog`, `lane:needs_spec` |
 | proposed, spec but no plan | `view:backlog`, `lane:in_spec` |
 | proposed, spec+plan | `view:backlog`, `lane:build_ready` |
