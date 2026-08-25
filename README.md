@@ -47,7 +47,20 @@ belongs to (a change, a plan, a type) shows as a colored chip, not another axis.
 Workbench has two layers. The server gives an agent the tools; a skill teaches the
 agent how to use them for your methodology.
 
-### 1. Build and install the binary
+### 1. Install the binary
+
+**Prebuilt release (recommended).** Each tagged release publishes a static binary
+for macOS and Linux (amd64 + arm64) at
+[Releases](https://github.com/ethanhinson/workbench/releases). Download the
+archive for your platform, then:
+
+```sh
+tar -xzf workbench_*_$(uname -s | tr '[:upper:]' '[:lower:]')_*.tar.gz
+install workbench_*/workbench ~/.local/bin/workbench
+workbench --version   # confirm it runs
+```
+
+**From source.** Requires Go (see `go.mod` for the version):
 
 ```sh
 git clone https://github.com/ethanhinson/workbench
@@ -55,8 +68,11 @@ cd workbench
 go build -o ~/.local/bin/workbench ./cmd/workbench
 ```
 
-That produces a single static binary (no CGO, SQLite is bundled). Make sure
+Either way you get a single static binary (no CGO, SQLite is bundled). Make sure
 `~/.local/bin` is on your `PATH`.
+
+> Homebrew and npm install paths are planned but not yet available; use a
+> release binary or `go build` for now.
 
 ### 2. Register it as a global MCP server (Claude Code)
 

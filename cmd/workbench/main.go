@@ -7,6 +7,8 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -18,6 +20,18 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// version is the release version, stamped at build time by the release workflow
+// via -ldflags "-X main.version=<tag>". A plain `go build` leaves it as "dev" so
+// `workbench --version` always prints something meaningful.
+var version = "dev"
+
+// writeVersion prints the stamped version. Kept separate from main so the
+// release binaries' self-identification is unit-testable without booting the
+// server.
+func writeVersion(w io.Writer) {
+	fmt.Fprintf(w, "workbench %s\n", version)
+}
+
 func main() {
 	var (
 		dbPath   = flag.String("db", envOr("KANBAN_DB", "kanban.db"), "path to the SQLite plan database")
@@ -27,8 +41,14 @@ func main() {
 		profile  = flag.String("profile", envOr("KANBAN_PROFILE", "sdd"), "methodology profile on first init: sdd|scrum|kanban")
 		httpAddr = flag.String("http", envOr("KANBAN_HTTP", ""), "serve the viz UI + JSON board API on this addr (e.g. :7777); empty disables")
 		vizOnly  = flag.Bool("viz-only", false, "run only the viz HTTP server (no MCP stdio) for browsing a board")
+		showVer  = flag.Bool("version", false, "print the workbench version and exit")
 	)
 	flag.Parse()
+
+	if *showVer {
+		writeVersion(os.Stdout)
+		return
+	}
 
 	abs, err := filepath.Abs(*dbPath)
 	if err != nil {
