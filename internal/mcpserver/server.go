@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ethanhinson/workbench/internal/adapter"
 	"github.com/ethanhinson/workbench/internal/board"
 	"github.com/ethanhinson/workbench/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -111,9 +112,10 @@ func (s *Server) register(srv *mcp.Server) {
 		Name: "board_set_layout",
 		Description: "Define how a board renders: its nav tabs and views. A board has NO layout until this " +
 			"is set (it renders empty). Pass a layout object: nav[] (tabs, each opening a view) + views{} " +
-			"(each with type list|lanes|board|doc; lanes/columns for lanes|board). Items appear where their " +
-			"view:/lane:/column: labels place them. Idempotent — replaces the layout. This is how a " +
-			"methodology skill shapes a tool-idiomatic board.",
+			"(each type list|lanes|board|doc, and columns:[{key,label}] listing the real profile columns " +
+			"the view OWNS). Placement is column-driven: an item's view is whichever view owns its " +
+			"column_key, and lanes/board swimlane by column_key. Idempotent — replaces the layout. This is " +
+			"how a methodology skill shapes a tool-idiomatic board.",
 	}, s.boardSetLayout)
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -139,9 +141,10 @@ func (s *Server) register(srv *mcp.Server) {
 		Name: "item_upsert",
 		Description: "Create-or-update a card keyed by (board_id, ext_key) — the hydration primitive for " +
 			"methodology skills. Re-running with the same ext_key UPDATES in place (never duplicates). Carry " +
-			"content (the full doc markdown a doc view renders) and placement labels (view:<v>, lane:<l>, " +
-			"column:<c>). Use as you work: whenever you touch a source artifact, upsert its card so the board " +
-			"stays live. ext_key is a stable source id like 'openspec:auth' or 'docket:74'.",
+			"content (the full doc markdown a doc view renders) and set the card's column (its placement — a " +
+			"view owns columns, so the column decides the card's view + lane) plus an optional group:<epic> " +
+			"chip. Use as you work: whenever you touch a source artifact, upsert its card so the board stays " +
+			"live. ext_key is a stable source id like 'openspec:auth' or 'docket:74'.",
 	}, s.itemUpsert)
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -199,6 +202,14 @@ func (s *Server) register(srv *mcp.Server) {
 			"columns, lanes, items, precomputed cell grid, stats). Feed this to a UI generator to render a " +
 			"custom visualization on demand, or to any external renderer.",
 	}, s.boardExport)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "docket_sync",
+		Description: "Re-project a repo's docket backlog (.docket/docs/changes) onto a board on demand. Reads " +
+			"every change manifest, deterministically maps each to a card (keyed docket:<id>) by its " +
+			"frontmatter, and reconciles deletes. Idempotent — safe to call repeatedly. Use when the " +
+			"filesystem watcher isn't running (e.g. a viz-less MCP session) and you want the board refreshed.",
+	}, s.docketSync)
 
 }
 
@@ -435,7 +446,7 @@ type itemCreateIn struct {
 	Lane     string   `json:"lane,omitempty" jsonschema:"swim lane key; defaults to the calling agent's lane"`
 	Priority string   `json:"priority,omitempty" jsonschema:"p0|p1|p2|p3; defaults to p2"`
 	SpecRef  string   `json:"spec_ref,omitempty"`
-	Labels   []string `json:"labels,omitempty" jsonschema:"namespaced labels as ns:value strings (incl. view:/lane:/column:)"`
+	Labels   []string `json:"labels,omitempty" jsonschema:"namespaced labels as ns:value strings, e.g. group:<epic> (the card chip) or area:<x>. Placement is the column, not a label."`
 }
 
 type itemOut struct {
@@ -487,7 +498,7 @@ type itemUpsertIn struct {
 	Lane     string   `json:"lane,omitempty"`
 	Priority string   `json:"priority,omitempty"`
 	SpecRef  string   `json:"spec_ref,omitempty"`
-	Labels   []string `json:"labels,omitempty" jsonschema:"namespaced labels incl. view:/lane:/column: for placement"`
+	Labels   []string `json:"labels,omitempty" jsonschema:"namespaced labels, e.g. group:<epic> (the card chip). Placement is the column, not a label."`
 }
 
 func (s *Server) itemUpsert(ctx context.Context, _ *mcp.CallToolRequest, in itemUpsertIn) (*mcp.CallToolResult, itemOut, error) {
@@ -717,6 +728,31 @@ func (s *Server) defaultLane(plan *board.Plan) string {
 		return s.agentID
 	}
 	return "shared"
+}
+
+type docketSyncIn struct {
+	BoardID string `json:"board_id" jsonschema:"the board to sync onto (from board_start)"`
+	RepoDir string `json:"repo_dir,omitempty" jsonschema:"repo root containing .docket/docs/changes; defaults to the server's project"`
+}
+
+// docketSync re-projects a repo's docket backlog onto a board on demand.
+func (s *Server) docketSync(ctx context.Context, _ *mcp.CallToolRequest, in docketSyncIn) (*mcp.CallToolResult, itemOut, error) {
+	plan, err := s.resolveBoard(ctx, in.BoardID)
+	if err != nil {
+		return nil, itemOut{}, err
+	}
+	repo := in.RepoDir
+	if repo == "" {
+		repo = s.defaultProject
+	}
+	a, ok := adapter.Detect(repo)
+	if !ok {
+		return nil, itemOut{}, fmt.Errorf("no docket footprint under %q", repo)
+	}
+	if err := a.Sync(ctx, s.st, plan.ID, repo); err != nil {
+		return nil, itemOut{}, err
+	}
+	return nil, itemOut{ID: plan.ID, Message: fmt.Sprintf("docket synced onto %q", plan.Name)}, nil
 }
 
 // parseLabels turns "ns:value" strings into board.Label.

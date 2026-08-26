@@ -13,9 +13,11 @@ repo's `.mcp.json`). The mental model:
 1. **Start a board** with `board_start` — you get back a `board_id`.
 2. **Shape it** with `board_set_layout` — declare the nav tabs + views (a board
    renders nothing until it has a layout).
-3. **Add work**: `item_create` (or `item_upsert` for source-keyed cards), tagging
-   each with `view:`/`lane:`/`column:` labels so it lands where you want; `item_link`
-   dependencies.
+3. **Add work**: `item_create` (or `item_upsert` for source-keyed cards), setting
+   each card's real `column_key` so it lands where you want — placement is
+   **column-driven**: each view *owns* a set of the board's profile columns (its
+   `columns: [{key, label}]`), and a card's nav view is derived from its
+   `column_key`. `item_link` dependencies.
 
 One database hosts **many boards**, grouped by project (a directory path) — run
 several in parallel and switch between them in the UI.
@@ -54,14 +56,14 @@ session's boards are grouped under it rather than the server's cwd.
 | `board_set_layout` | **Shape the board:** declare `nav` tabs + `views` (type `list\|lanes\|board\|doc`). A board renders nothing until this is set. |
 | `board_get_layout` | Read the current layout to tweak it. |
 | `board_view` | See one board (`board_id`) as columns × lanes (text form). |
-| `item_create` | Add an item (`board_id` + `epic\|story\|task\|bug\|spike`); tag `view:`/`lane:`/`column:` + `content`. Nest with `parent_id`. |
-| `item_upsert` | Create-or-update a card by `ext_key` (idempotent) with `content` + placement labels — the hydration primitive. |
+| `item_create` | Add an item (`board_id` + `epic\|story\|task\|bug\|spike`); set its `column_key` (which view owns that column decides placement) + `content`. Nest with `parent_id`. |
+| `item_upsert` | Create-or-update a card by `ext_key` (idempotent) with `content`, carrying its `column_key` — the hydration primitive. |
 | `item_set_content` | Replace a card's `content` (the doc markdown a `doc` view renders). |
 | `item_link` | Link two items (`board_id`, `from_id`, `to_id`, `kind`: depends_on\|related\|discovered_from). Flat, not nested. |
-| `item_move` | Move an item to a profile column: `backlog\|specifying\|specd\|in_progress\|review\|done` (orthogonal to view placement). |
+| `item_move` | Set an item's `column_key` — the single placement primitive. Its view is whichever view *owns* that column; within a lanes/board view it swimlanes by that column. Instantly reflected. |
 | `item_set_spec` | Set spec ref + status `missing\|draft\|approved` (SDD heartbeat). |
 | `item_set_blocked` | Flag/unflag blocked, with a reason. |
-| `item_label` | Namespaced labels incl. `view: lane: column:` (placement) + `type: priority: spec: area:` as `ns:value`. |
+| `item_label` | Namespaced labels: `group:<epic>` (a glanceable chip) + `type: priority: spec: area:` as `ns:value`. Placement is not a label — set `column_key` instead. |
 | `item_comment` | Append to an item's activity log. |
 | `items_list` | List a board's items with filters. |
 | `board_export` | The full renderer-agnostic Snapshot (incl. layout) for a custom UI. |

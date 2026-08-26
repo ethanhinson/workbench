@@ -33,13 +33,14 @@ Workbench serves every repo you touch.
 
 ```
 board_start   "auth work"           -> a board_id (idempotent, project-scoped)
-board_set_layout   { nav, views }    -> tabs + swim lanes; the board's whole shape
-item_upsert   { ext_key, content,    -> a card, keyed for idempotent re-runs,
-                lane: doing,            placed by its labels, carrying the doc it
+board_set_layout   { nav, views }    -> tabs + views that OWN columns; the board's shape
+item_upsert   { ext_key, content,    -> a card, keyed for idempotent re-runs, placed by
+                column: doing,          its column (a view owns it), carrying the doc it
                 group: auth }           renders
 ```
 
-Lanes are status (To Do, Doing, Done, or a pipeline). The epic or group a card
+Columns are status (To Do, Doing, Done, or a pipeline); a view owns a set of them, so
+a card's view and swimlane both follow from its column. The epic or group a card
 belongs to (a change, a plan, a type) shows as a colored chip, not another axis.
 
 ## Onboarding
@@ -117,11 +118,13 @@ declares the nav tabs and their views. A view is one of four types:
 - `board` vertical swim lanes only
 - `doc` a rendered-markdown reader over each card's `content`
 
-Placement is explicit labels. An item's `view:` label picks which nav view it
-appears in, `lane:` picks its status lane, and `group:` shows an epic or grouping (a
-change, a plan, a type) as a color-coded chip on the card. The renderer just buckets
-cards by their labels, so there is no placement logic in the server. A board with no
-layout renders an empty state until a skill or `board_set_layout` shapes it.
+Placement is column-driven. Each view *owns* a set of the board's real columns, and
+an item's nav view is derived from its `column_key` — so moving a card (via
+`item_move`, or a methodology adapter) instantly changes where it renders, with no
+separate labels to keep in sync. Within a lanes/board view, cards swimlane by their
+owned column by default. `group:` still shows an epic or grouping (a change, a plan,
+a type) as a color-coded chip. A board with no layout renders an empty state until a
+skill or `board_set_layout` shapes it.
 
 Content lives on the card, not the filesystem. The agent puts a spec or ADR's
 markdown into the item's `content` field, and the `doc` view renders it. The server

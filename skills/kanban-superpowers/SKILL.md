@@ -37,7 +37,11 @@ board (sdd lifecycle columns + a stray `spec:missing` badge on every card).
 
 ## Step 3 — design the layout, then set it
 
-Propose this (adjust interactively — see [Interactive setup](#interactive-setup)):
+**Placement is column-driven.** The superpowers profile's real columns are `todo`,
+`doing`, `done`. Each view *owns* a subset of those columns (via its
+`columns: [{key, label}]`), and a card's nav view is derived from its `column_key` —
+whichever view owns that column. Propose this (adjust interactively — see
+[Interactive setup](#interactive-setup)):
 
 ```
 board_set_layout { board_id, layout: {
@@ -48,21 +52,24 @@ board_set_layout { board_id, layout: {
     { id: "reviews",  label: "Reviews",  view: "reviews" }
   ],
   views: {
-    "plans":    { type: "list" },                         // each plan = a story
-    "progress": { type: "lanes",
-                  // lanes = STATUS (fixed); the plan is a group chip on each card
-                  lanes: [{key:"todo",label:"To Do"},{key:"doing",label:"Doing"},{key:"done",label:"Done"}],
-                  group_by: "group" },
+    // Plans own todo; each plan card is a story that sits there.
+    "plans":    { type: "list",
+                  columns: [{key:"todo",label:"Plans"}] },
+    // Progress owns todo/doing/done; task cards swimlane by their owned column_key.
+    "progress": { type: "lanes", group_by: "group",
+                  columns: [{key:"todo",label:"To Do"},{key:"doing",label:"Doing"},{key:"done",label:"Done"}] },
     "specs":    { type: "doc" },
-    "reviews":  { type: "list" }
+    "reviews":  { type: "list",
+                  columns: [{key:"done",label:"Reviews"}] }
   }
 }}
 ```
 
-**Lanes are status, not the plan.** The `progress` view reads like a kanban board
-(To Do / Doing / Done), and each task card carries a **`group:<plan>` chip**
-(color-coded) so you see which plan a task belongs to. This layout is **fixed** —
-no per-plan discovery needed before `board_set_layout`.
+**Task cards swimlane by their owned `column_key`.** The `progress` view reads like a
+kanban board (To Do / Doing / Done) because it owns those three columns, and each
+task card carries a **`group:<plan>` chip** (color-coded) so you see which plan a
+task belongs to. This layout is **fixed** — no per-plan discovery needed before
+`board_set_layout`.
 
 ## Step 4 — hydrate the cards (upsert by ext_key)
 
@@ -71,8 +78,8 @@ stripped (e.g. `2026-07-12-m1-walkable-slice.md` → `m1-walkable-slice`). Use i
 consistently for the plan's `ext_key`, its lane key, and its tasks' keys.
 
 For each **plan** `docs/superpowers/plans/<date>-<name>.md`, `item_upsert`
-`ext_key: "sp:plan:<name>"`: `view:plans`, `content:` the plan markdown,
-`spec_ref:` the path.
+`ext_key: "sp:plan:<name>"` with `column_key: "todo"` (owned by the `plans` view),
+`content:` the plan markdown, `spec_ref:` the path.
 
 **Tasks — how Superpowers plans actually structure them:** a plan's tasks are
 `### Task N: <title>` headings (sometimes sub-numbered `### Task N.M:`), each with
@@ -81,20 +88,29 @@ the step checkboxes — one card per task. **Done-ness is authoritative in
 `.superpowers/sdd/progress.md`**, a ledger of `Task N: complete …` lines; treat a
 task as done if progress.md marks it complete (a `task-N-report.md` file is a
 secondary hint). For each task, `item_upsert`
-`ext_key: "sp:plan:<name>:task:<N>"`: `view:progress`, **`lane:done` if complete
-else `lane:todo`** (lane = status), and **`group:<name>`** so the card shows its
-plan as a colored chip; `item_link depends_on` the plan card; pull
-`task-N-report.md` (if present) into `content`.
+`ext_key: "sp:plan:<name>:task:<N>"`, carrying its `column_key` (the `progress`
+view owns todo/doing/done):
+
+| Task state (from progress.md) | `column_key` |
+|---|---|
+| marked complete | `done` |
+| in flight | `doing` |
+| not started | `todo` |
+
+Also set **`group:<name>`** so the card shows its plan as a colored chip;
+`item_link depends_on` the plan card; pull `task-N-report.md` (if present) into
+`content`.
 
 > Multiple plans can coexist under one `.superpowers/sdd/`. `progress.md` and the
 > `task-N-*.md` files belong to the plan **currently executing** — associate them
 > with that plan, not a differently-named one.
 
 For each **spec** `docs/superpowers/specs/<date>-<name>.md`, upsert
-`ext_key: "sp:spec:<name>"`, `view:specs`, `content:` the spec markdown.
+`ext_key: "sp:spec:<name>"` into the `specs` doc view, `content:` the spec markdown.
 
-For each **review diff** `.superpowers/sdd/review-*.diff`, upsert a `view:reviews`
-card (`content:` the diff, in a ```diff fence).
+For each **review diff** `.superpowers/sdd/review-*.diff`, upsert a card with
+`column_key: "done"` (owned by the `reviews` view), `content:` the diff in a ```diff
+fence.
 
 Read each file and pass its **text as `content`** for the doc/list views to render.
 

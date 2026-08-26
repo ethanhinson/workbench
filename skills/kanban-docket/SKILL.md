@@ -9,13 +9,25 @@ description: Use whenever you are working with a repo's docket backlog (a `.dock
 
 [Docket](https://github.com/ethanhinson) tracks work as markdown **change
 manifests** under `.docket/docs/changes/{active,archive}/*.md` (YAML-ish
-frontmatter) plus **ADRs** under `docs/adrs/`. This skill teaches you to read those
-files and build a **docket-idiomatic kanban board** from them via Workbench's MCP
-tools — no importer, no server-side file reading. You read the files; you upsert
-the cards; the board renders whatever layout you declare.
+frontmatter) plus **ADRs** under `docs/adrs/`.
 
-The board is a **live projection**: the hydration rhythm is *whenever you touch a
-docket artifact, upsert its card* (see [Keeping it live](#keeping-it-live)).
+**Workbench now projects a docket backlog deterministically, in the binary.** A
+built-in adapter reads the change manifests and derives each card's placement from
+its frontmatter — no manual upserting, no placement labels. The fastest path is:
+
+```sh
+workbench init --project <repo-abs-path>   # detect docket, create the board, set the
+                                           # layout, hydrate every change, print the URL
+```
+
+Then run the server (`workbench --project <repo> --http :7777`) and it **watches the
+change dir and re-syncs live** — edit a manifest (add a `branch:`, flip `status:`)
+and the card moves on its own. This replaces the old "upsert each card by hand"
+rhythm; placement is a pure function of the manifest, so the board can't drift.
+
+Use the manual steps below only when you can't run `init` (e.g. a viz-less MCP
+session) — and even then, prefer the `docket_sync` tool, which runs the same
+deterministic adapter on demand.
 
 ## Prerequisites
 
@@ -46,62 +58,54 @@ which mislabels the board (e.g. a stray `spec:missing` badge on every card).
 
 ## Step 3 — design the docket layout, then set it
 
-Propose this docket-idiomatic layout, but **treat it as a starting point — walk the
-user through it and adjust before locking in** (see [Interactive setup](#interactive-setup)):
+`workbench init` and `docket_sync` set this layout for you. Author it by hand only
+when driving `board_set_layout` directly. **Placement is column-driven:** each view
+*owns* the real docket profile columns, and a card's nav view is derived from its
+`column_key` — there are no `view:`/`lane:` placement labels.
 
 ```
 board_set_layout { board_id, layout: {
   nav: [
     { id: "backlog",  label: "Backlog",  view: "backlog" },
     { id: "inflight", label: "In Flight", view: "inflight" },
-    { id: "adrs",     label: "ADRs",     view: "adrs" },
     { id: "done",     label: "Done",     view: "done" }
   ],
   views: {
-    // lanes = grooming/pipeline STATUS; the change type is a group chip on each card
+    // each view OWNS real docket columns; lanes/board swimlane by owned column.
     "backlog":  { type: "lanes", group_by: "group",
-                  lanes: [{key:"needs_spec",label:"Needs Spec"},{key:"in_spec",label:"In Spec"},{key:"build_ready",label:"Build-Ready"}] },
+                  columns: [{key:"backlog",label:"Needs Spec"},{key:"specifying",label:"Specifying"},{key:"specd",label:"Build-Ready"}] },
     "inflight": { type: "lanes", group_by: "group",
-                  lanes: [{key:"spec",label:"Spec"},{key:"build",label:"Build"},{key:"review",label:"Review"}] },
-    "adrs":     { type: "doc" },
-    "done":     { type: "list" }
+                  columns: [{key:"in_progress",label:"In Progress"},{key:"review",label:"In Review"}] },
+    "done":     { type: "list",
+                  columns: [{key:"done",label:"Done"},{key:"deferred",label:"Deferred"},{key:"killed",label:"Killed"}] }
   }
 }}
 ```
 
-## Step 4 — hydrate the cards (upsert by ext_key)
+## Step 4 — hydrate the cards (only if not using init / docket_sync)
 
-For each change manifest, `item_upsert` a card keyed by `docket:<id>`. Map the
-frontmatter to **placement labels** so it lands in the right view/lane/column:
+Prefer `workbench init` or the `docket_sync` tool — they run the deterministic
+adapter. If you must hydrate manually, for each change `item_upsert` a card keyed by
+`docket:<id>` and set its **real `column_key`** (via `item_move` after upsert, or by
+carrying it), which the renderer buckets by. The manifest → column mapping (first
+match wins):
 
-| Manifest field | Card field / label |
+| Manifest state (first match wins) | `column_key` |
 |---|---|
-| `id` + `title` | `title: "#<id> <title>"`, `ext_key: "docket:<id>"` |
-| `type` (feat/fix/chore/refactor) | **`group:<type>`** (the colored chip, in every view) |
-| `status: done\|killed\|deferred` | `view:done` |
-| `trivial: true` (proposed, no branch/pr) | `view:backlog`, `lane:build_ready` — the manifest body *is* the spec; a trivial change is build-ready and skips spec/plan |
-| proposed, no spec | `view:backlog`, `lane:needs_spec` |
-| proposed, spec but no plan | `view:backlog`, `lane:in_spec` |
-| proposed, spec+plan | `view:backlog`, `lane:build_ready` |
-| `branch:` set (in progress) | `view:inflight`, `lane:build` |
-| `pr:` set (review) | `view:inflight`, `lane:review` |
-| `blocked_by:` set | flag `item_set_blocked` (shows a blocked badge); note the blocker |
-| `spec:` path | read that file; pass its markdown as `content`; set `spec_ref` |
-| `depends_on` / `discovered_from` / `related` | `item_link` from this card to the referenced `docket:<n>` |
+| `status: done` | `done` |
+| `status: killed` | `killed` |
+| `status: deferred` | `deferred` |
+| `pr:` set (not terminal) | `review` |
+| `branch:` set (not terminal, no pr) | `in_progress` |
+| `status: in_progress` (no branch/pr) | `in_progress` |
+| `trivial: true` (proposed, no branch/pr) | `specd` — the body *is* the spec |
+| proposed, spec + plan | `specd` |
+| proposed, spec, no plan | `specifying` |
+| proposed, no spec | `backlog` |
 
-Example upsert for one change:
-```
-item_upsert {
-  board_id, ext_key: "docket:64", title: "#64 bash egress control",
-  content: "<the full markdown of the spec/proposal you read>",
-  spec_ref: "docs/superpowers/specs/....md",
-  labels: ["view:inflight", "lane:spec", "column:doing", "area:feat"]
-}
-```
-
-For each **ADR** under `docs/adrs/`, upsert `ext_key: "adr:<id>"`, `view:adrs`,
-`content:` the ADR markdown, and `item_link` it to the `docket:<change>` it came
-from.
+Also: `type` (feat/fix/chore) → **`group:<type>`** chip; `blocked_by:` set →
+`item_set_blocked`; `spec:` path → read the file, pass its markdown as `content`,
+set `spec_ref`; `depends_on`/`related` → `item_link` to `docket:<n>`.
 
 Read the spec/proposal/ADR file and pass its **text as `content`** — the doc view
 renders that. Never rely on the server to read files.

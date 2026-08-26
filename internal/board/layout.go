@@ -6,8 +6,9 @@ import "fmt"
 // the board declares here, rather than a hard-coded set of tabs. A board with no
 // layout (the zero value) renders an empty state until a methodology skill (or the
 // board_set_layout tool) sets one. This is the seam that makes the UI "agentic":
-// the layout is data, authored per board, and placement is driven by item labels
-// (view:/lane:/column:), not by any Go logic.
+// the layout is data, authored per board. Placement is column-driven — each view
+// owns a set of the board's real columns, and an item's view/lane derive from its
+// column_key — so there is no placement logic in Go beyond column ownership.
 type Layout struct {
 	// Nav is the tab/menu strip, left→right. Each entry opens a named view.
 	Nav []NavItem `json:"nav"`
@@ -33,16 +34,21 @@ const (
 	ViewFeed  ViewType = "feed"  // reverse-chronological activity stream (time-series)
 )
 
-func (t ViewType) needsLanes() bool { return t == ViewLanes || t == ViewBoard }
 
-// LayoutView defines one view. Which of Lanes/Columns are required depends on Type.
-// Include selects which items appear (by default the items tagged view:<the view's
-// own id>); items are then bucketed into Lanes/Columns by their lane:/column: tags.
+// LayoutView defines one view. Placement is column-driven: Columns lists the real
+// profile column_keys this view OWNS, and an item's nav view is whichever view
+// owns its column_key. Within a lanes/board view, cards swimlane by their owned
+// column_key by default (so a docket "In Flight" view owning {in_progress,review}
+// shows those two lanes for free); an optional Lanes axis buckets by lane_key
+// instead for a true 2-D grid. There are no view:/lane:/column: placement labels.
 type LayoutView struct {
-	Type    ViewType     `json:"type"`
-	Lanes   []LayoutAxis `json:"lanes,omitempty"`
+	Type ViewType `json:"type"`
+	// Columns are the real profile column_keys this view owns. Required for every
+	// placement view; also the default swimlane axis for lanes/board.
 	Columns []LayoutAxis `json:"columns,omitempty"`
-	Include *ViewInclude `json:"include,omitempty"`
+	// Lanes is an OPTIONAL secondary axis (bucketed by item.lane_key). When empty, a
+	// lanes/board view swimlanes by its owned Columns.
+	Lanes []LayoutAxis `json:"lanes,omitempty"`
 	// GroupBy is the label namespace whose value colors/labels each card as an
 	// epic/group chip (default "group"). Grouping is a glanceable chip, not an axis.
 	GroupBy string `json:"group_by,omitempty"`
@@ -55,23 +61,17 @@ type LayoutAxis struct {
 	Label string `json:"label"`
 }
 
-// ViewInclude selects which items a view shows. View is the view: label value an
-// item must carry; empty means "the view's own id".
-type ViewInclude struct {
-	View string `json:"view,omitempty"`
+// ownsColumns reports whether a view type places work items by owning columns.
+// feed (activity time-series) and doc (markdown reader) are content views that
+// don't bucket by column, so they may omit Columns.
+func (t ViewType) ownsColumns() bool {
+	return t == ViewList || t == ViewLanes || t == ViewBoard
 }
 
-// IncludeView returns the view: label value items must carry to appear in the named
-// view — the explicit Include.View if set, else the view's own id.
-func (l LayoutView) IncludeView(viewID string) string {
-	if l.Include != nil && l.Include.View != "" {
-		return l.Include.View
-	}
-	return viewID
-}
-
-// Validate checks a layout is renderable: nav entries point at real views, view
-// types are known, and lane/column axes are present where the type needs them.
+// Validate checks a layout is structurally renderable: nav entries point at real
+// views, view types are known, placement views declare owned columns, and axes are
+// unique. Column-key validity against the profile is a separate, profile-aware
+// check (ValidateForProfile).
 func (lo Layout) Validate() error {
 	if len(lo.Nav) == 0 {
 		return fmt.Errorf("layout needs at least one nav item")
@@ -95,19 +95,51 @@ func (lo Layout) Validate() error {
 		default:
 			return fmt.Errorf("view %q: unknown type %q (want list|lanes|board|doc|feed)", id, v.Type)
 		}
-		if v.Type.needsLanes() && len(v.Lanes) == 0 {
-			return fmt.Errorf("view %q (%s) needs at least one lane", id, v.Type)
-		}
-		// Columns are optional — a lanes view whose lanes are status doesn't need a
-		// second axis. When present, they must be well-formed.
-		if err := axesUnique(v.Lanes, "lane", id); err != nil {
-			return err
+		if v.Type.ownsColumns() && len(v.Columns) == 0 {
+			return fmt.Errorf("view %q (%s) needs at least one owned column", id, v.Type)
 		}
 		if err := axesUnique(v.Columns, "column", id); err != nil {
 			return err
 		}
+		if err := axesUnique(v.Lanes, "lane", id); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// ValidateForProfile checks the layout's column ownership against the board's real
+// profile columns: every owned column key must be a real column, and no column may
+// be owned by two views (which would make nav routing ambiguous, since an item's
+// view is derived from its column_key). An unowned column is NOT an error — its
+// items fall to the renderer's unfiled fallback — but is returned in `unowned` so a
+// caller can surface it as a warning.
+func (lo Layout) ValidateForProfile(cols []ColumnDef) (unowned []string, err error) {
+	real := map[string]bool{}
+	for _, c := range cols {
+		real[c.Key] = true
+	}
+	owner := map[string]string{} // column_key -> view id that owns it
+	for id, v := range lo.Views {
+		if !v.Type.ownsColumns() {
+			continue
+		}
+		for _, c := range v.Columns {
+			if !real[c.Key] {
+				return nil, fmt.Errorf("view %q owns column %q, which is not a profile column", id, c.Key)
+			}
+			if prev, ok := owner[c.Key]; ok {
+				return nil, fmt.Errorf("column %q is owned by both view %q and view %q; a column may belong to at most one view", c.Key, prev, id)
+			}
+			owner[c.Key] = id
+		}
+	}
+	for _, c := range cols {
+		if _, ok := owner[c.Key]; !ok {
+			unowned = append(unowned, c.Key)
+		}
+	}
+	return unowned, nil
 }
 
 func axesUnique(axes []LayoutAxis, kind, viewID string) error {

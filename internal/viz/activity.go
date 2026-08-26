@@ -3,22 +3,13 @@ package viz
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"strings"
-	"sync/atomic"
 
 	"github.com/ethanhinson/workbench/internal/board"
 )
-
-// activitySeq is a process-local monotonic counter giving each activity event a
-// unique ext_key suffix. The broker revision is NOT unique per event (it only
-// bumps on store mutations, and resets on restart), so keying on it collided and
-// upserts overwrote sibling events. An atomic counter never collides within a
-// server's lifetime; across restarts the session prefix keeps old cards distinct.
-var activitySeq atomic.Uint64
 
 // activityMax bounds a request body so a runaway hook can't feed us an unbounded
 // payload. Hook events are small; 256KiB is generous.
@@ -380,10 +371,11 @@ func (s *Server) boardForProject(ctx context.Context, project string) string {
 	return boards[len(boards)-1].ID
 }
 
-// projectActivity upserts one activity event as a card on the board's Activity
-// view. Cards are keyed by a per-event ext_key so the same delivery never
-// duplicates. The card lands in view:activity, laned by session, tagged by the
-// event kind — a live feed of "what the agent is doing".
+// projectActivity records one activity event to the board's passive event log —
+// NOT as a board card. Activity is a session's tool-call feed, a time-series that
+// a feed view renders; it lives off the item table entirely so it can never leak
+// into a curated work view. The event is scoped to the board the session works on
+// (activityBoard); if that can't be resolved the event is dropped (lossy-safe).
 func (s *Server) projectActivity(r *http.Request, ev ActivityEvent) error {
 	planID := s.activityBoard(r, ev)
 	if planID == "" {
@@ -395,11 +387,6 @@ func (s *Server) projectActivity(r *http.Request, ev ActivityEvent) error {
 		// outcome when the harness didn't say which board it's working on.
 		return nil
 	}
-	// A monotonic, collision-free per-event key: session prefix + a process-local
-	// atomic counter. Each event gets its own card (the store stamps created_at for
-	// ordering); no two events ever share a key within this server's lifetime.
-	sess := shortID(ev.SessionID)
-	extKey := fmt.Sprintf("activity:%s:%d", sess, activitySeq.Add(1))
 
 	title := ev.EventType
 	if ev.Tool != "" {
@@ -409,43 +396,19 @@ func (s *Server) projectActivity(r *http.Request, ev ActivityEvent) error {
 		title = title + " — " + ev.Target
 	}
 
-	// The Activity view is a lanes view keyed by event category (tool/subagent/
-	// session), and the SPA buckets a card by its lane: label. So lane: carries the
-	// category and group: carries the session id (rendered as a per-card chip).
-	labels := []board.Label{
-		{NS: "view", Value: "activity"},
-		{NS: "lane", Value: groupForEvent(ev)},
-		{NS: "group", Value: laneForSession(sess)},
-	}
-
-	it := &board.Item{
-		PlanID:    planID,
-		Kind:      board.KindTask,
-		Title:     title,
-		Body:      activityBody(ev),
-		ColumnKey: "backlog", // activity lives in its own view, not the workflow columns
-		ExtKey:    extKey,
-		Labels:    labels,
-	}
-	_, err := s.st.UpsertByExtKey(r.Context(), "activity", it)
-	return err
+	return s.st.LogActivity(r.Context(), planID, board.ActivityEntry{
+		Kind:     ev.EventType,
+		Category: categoryForEvent(ev),
+		Title:    title,
+		Session:  shortID(ev.SessionID),
+		Harness:  ev.Harness,
+		Status:   ev.Status,
+	})
 }
 
-func activityBody(ev ActivityEvent) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "**%s** · `%s`", ev.EventType, ev.Harness)
-	if ev.Status != "" {
-		fmt.Fprintf(&b, " · %s", ev.Status)
-	}
-	if ev.AgentType != "" {
-		fmt.Fprintf(&b, "\n\nsubagent: %s", ev.AgentType)
-	}
-	return b.String()
-}
-
-// groupForEvent buckets an event for the Activity view's lanes: tool activity,
+// categoryForEvent buckets an event for the feed's category chip: tool activity,
 // subagent lifecycle, or session lifecycle.
-func groupForEvent(ev ActivityEvent) string {
+func categoryForEvent(ev ActivityEvent) string {
 	switch {
 	case strings.HasPrefix(ev.EventType, "tool_use"):
 		return "tool"
@@ -454,13 +417,6 @@ func groupForEvent(ev ActivityEvent) string {
 	default:
 		return "session"
 	}
-}
-
-func laneForSession(sess string) string {
-	if sess == "" {
-		return "session"
-	}
-	return sess
 }
 
 func shortID(id string) string {
