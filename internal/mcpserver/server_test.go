@@ -389,26 +389,28 @@ func TestBoardSetProjectThroughMCP(t *testing.T) {
 }
 
 // TestItemUpsertAndContentThroughMCP proves item_upsert is idempotent by ext_key,
-// carries content + placement labels, and item_set_content updates content.
+// places the card by its real column (column-driven placement) and carries a
+// group chip, and item_set_content updates content.
 func TestItemUpsertAndContentThroughMCP(t *testing.T) {
 	cs, _ := clientFor(t, "sdd")
 	b := startBoard(t, cs, "OpenSpec board", "sdd")
 
-	// First upsert creates the card with content + placement labels.
+	// First upsert creates the card in a real column with a group chip.
 	var first idResult
 	call(t, cs, "item_upsert", map[string]any{
 		"board_id": b, "ext_key": "openspec:auth", "title": "Auth change",
-		"content": "# Auth\nproposal body", "labels": []string{"view:specs", "lane:proposed"},
+		"content": "# Auth\nproposal body", "column": "specifying", "labels": []string{"group:auth"},
 	}, &first, false)
 	if first.ID == "" {
 		t.Fatal("upsert returned no id")
 	}
 
-	// Re-upsert with the same ext_key updates in place (same id, no duplicate).
+	// Re-upsert with the same ext_key updates in place (same id, no duplicate) and
+	// moves the card to a new column.
 	var second idResult
 	call(t, cs, "item_upsert", map[string]any{
 		"board_id": b, "ext_key": "openspec:auth", "title": "Auth change (v2)",
-		"content": "# Auth\nrevised", "labels": []string{"view:specs", "lane:approved"},
+		"content": "# Auth\nrevised", "column": "specd", "labels": []string{"group:auth"},
 	}, &second, false)
 	if second.ID != first.ID {
 		t.Fatalf("upsert should update in place: %s vs %s", first.ID, second.ID)
@@ -424,18 +426,18 @@ func TestItemUpsertAndContentThroughMCP(t *testing.T) {
 	if it.Title != "Auth change (v2)" || it.Content != "# Auth\nrevised" {
 		t.Fatalf("upsert did not update fields: %+v", it)
 	}
-	// Placement labels are present.
-	var hasView, hasLane bool
+	// Placement is the real column, and the group chip survives.
+	if it.ColumnKey != "specd" {
+		t.Fatalf("column-driven placement wrong: column_key=%q, want specd", it.ColumnKey)
+	}
+	var hasGroup bool
 	for _, l := range it.Labels {
-		if l.NS == "view" && l.Value == "specs" {
-			hasView = true
-		}
-		if l.NS == "lane" && l.Value == "approved" {
-			hasLane = true
+		if l.NS == "group" && l.Value == "auth" {
+			hasGroup = true
 		}
 	}
-	if !hasView || !hasLane {
-		t.Fatalf("placement labels missing: %+v", it.Labels)
+	if !hasGroup {
+		t.Fatalf("group chip missing: %+v", it.Labels)
 	}
 
 	// item_set_content updates just the content.
@@ -483,8 +485,8 @@ func TestSnapshotCarriesLayout(t *testing.T) {
 }
 
 // TestItemUpsertValidatesLabels proves item_upsert rejects a malformed label
-// (which would otherwise silently hide the card from every view) but accepts valid
-// view:/lane:/column: placement labels.
+// namespace but accepts valid ones (group: the card chip; view/lane/column remain
+// valid open namespaces even though they no longer drive placement).
 func TestItemUpsertValidatesLabels(t *testing.T) {
 	cs, _ := clientFor(t, "sdd")
 	b := startBoard(t, cs, "Validate board", "sdd")
@@ -496,8 +498,8 @@ func TestItemUpsertValidatesLabels(t *testing.T) {
 	if !strings.Contains(errText, "namespace") {
 		t.Fatalf("expected namespace rejection, got: %s", errText)
 	}
-	// Valid placement labels → accepted.
+	// Valid labels → accepted (group is the chip; view/lane stay valid-but-inert).
 	call(t, cs, "item_upsert", map[string]any{
-		"board_id": b, "ext_key": "x:2", "title": "ok", "labels": []string{"view:specs", "lane:a", "column:done"},
+		"board_id": b, "ext_key": "x:2", "title": "ok", "labels": []string{"group:auth", "view:specs", "lane:a"},
 	}, nil, false)
 }

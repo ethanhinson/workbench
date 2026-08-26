@@ -33,13 +33,14 @@ Workbench serves every repo you touch.
 
 ```
 board_start   "auth work"           -> a board_id (idempotent, project-scoped)
-board_set_layout   { nav, views }    -> tabs + swim lanes; the board's whole shape
-item_upsert   { ext_key, content,    -> a card, keyed for idempotent re-runs,
-                lane: doing,            placed by its labels, carrying the doc it
+board_set_layout   { nav, views }    -> tabs + views that OWN columns; the board's shape
+item_upsert   { ext_key, content,    -> a card, keyed for idempotent re-runs, placed by
+                column: doing,          its column (a view owns it), carrying the doc it
                 group: auth }           renders
 ```
 
-Lanes are status (To Do, Doing, Done, or a pipeline). The epic or group a card
+Columns are status (To Do, Doing, Done, or a pipeline); a view owns a set of them, so
+a card's view and swimlane both follow from its column. The epic or group a card
 belongs to (a change, a plan, a type) shows as a colored chip, not another axis.
 
 ## Onboarding

@@ -6,8 +6,9 @@ import "fmt"
 // the board declares here, rather than a hard-coded set of tabs. A board with no
 // layout (the zero value) renders an empty state until a methodology skill (or the
 // board_set_layout tool) sets one. This is the seam that makes the UI "agentic":
-// the layout is data, authored per board, and placement is driven by item labels
-// (view:/lane:/column:), not by any Go logic.
+// the layout is data, authored per board. Placement is column-driven — each view
+// owns a set of the board's real columns, and an item's view/lane derive from its
+// column_key — so there is no placement logic in Go beyond column ownership.
 type Layout struct {
 	// Nav is the tab/menu strip, left→right. Each entry opens a named view.
 	Nav []NavItem `json:"nav"`

@@ -5,11 +5,13 @@ package board
 // or a static export all consume this exact shape. Bump SchemaVersion on any
 // breaking change so renderers can negotiate.
 //
-// The board's shape is agent-authored: Layout declares the nav + views, and each
-// item's view:/lane:/column: labels place it. A renderer reads Layout, buckets
-// Items by their tags, and renders each item's Content for doc views. It never
-// reads the filesystem. HasLayout is false when no layout is set (render empty).
-// Dependencies are shown as Links, never as nesting.
+// The board's shape is agent-authored: Layout declares the nav + views, each view
+// owning a set of the board's real columns. A renderer reads Layout and buckets
+// Items by their column_key (an item's view is whichever view owns its column;
+// within a view it swimlanes by column_key, or by lane_key for a 2-D grid), and
+// renders each item's Content for doc views. It never reads the filesystem.
+// HasLayout is false when no layout is set (render empty). Dependencies are shown
+// as Links, never as nesting.
 type Snapshot struct {
 	SchemaVersion int           `json:"schema_version"`
 	Plan          SnapshotPlan  `json:"plan"`
@@ -17,7 +19,7 @@ type Snapshot struct {
 	HasLayout     bool          `json:"has_layout"`
 	Columns       []ColumnDef   `json:"columns"` // underlying item columns (profile lifecycle)
 	Lanes         []Lane        `json:"lanes"`
-	Items         []Item        `json:"items"` // flat; placement is via each item's column_key/lane_key
+	Items         []Item        `json:"items"` // flat; placement is each item's column_key/lane_key
 	Links         []Link        `json:"links"`
 	// Activity is the passive harness event log (a session's tool-call feed),
 	// newest-first. It is NOT board work — it lives off the item table entirely, so

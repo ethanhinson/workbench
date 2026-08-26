@@ -30,7 +30,7 @@ Ground truth comes from two independent sources:
 |---|---|---|
 | 1 | Started unprompted | The agent called `board_start` / `board_set_layout` and a board exists in the db. |
 | 2 | Updated mid-work | It upserted/created cards (not just an empty shell) and the db has items. |
-| 3 | Correct placement | A majority of cards carry a `view:` label, so they render in a nav view. |
+| 3 | Correct placement | A majority of cards carry a real `column_key` that a layout view owns, so they render in a nav view. Placement is column-driven — a card's nav view and swimlane derive from its `column_key`, not from `view:`/`lane:` labels. |
 | 4 | Recovers from drift | After a soft nudge ("can I see this on a board?"), a follow-up turn uses board tools and a board exists. Scored only when a drift transcript is provided. |
 
 `adopted` (the headline signal) is simply: did the run call any board tool at all.

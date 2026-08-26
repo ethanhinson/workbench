@@ -247,9 +247,9 @@ func (s *Store) ListPlansForProject(ctx context.Context, project string) ([]Plan
 }
 
 func (s *Store) listPlans(ctx context.Context, project string, filter bool) ([]PlanSummary, error) {
-	// The count is work tickets only — activity-feed events (a view:activity label)
-	// are a session's tool-call log, not board work, and would inflate the number
-	// with a different kind of thing (a docket board of 6 changes reading "43").
+	// The count is work tickets only. Activity now lives in the passive event log
+	// (off the item table), so it can't inflate this — but older boards may still
+	// hold legacy view:activity items, so we keep excluding those defensively.
 	q := `SELECT p.id, p.name, p.project, p.profile, p.created_at,
 	             COUNT(i.id) FILTER (WHERE i.id NOT IN (
 	               SELECT item_id FROM label WHERE ns='view' AND value='activity'))
@@ -760,11 +760,11 @@ func (s *Store) CreateItem(ctx context.Context, agentID string, it *board.Item) 
 }
 
 // UpsertByExtKey inserts or updates an item keyed by (plan_id, ext_key). Used by
-// the item_upsert tool (methodology hydration) so re-running only updates existing
-// cards rather than duplicating them. It bypasses policy gates (the external source
-// is authoritative for the item's state) but DOES validate labels — a mistagged
-// placement label (view:/lane:/column:) would otherwise silently hide the card
-// from every view. Labels are fully replaced.
+// the item_upsert tool and the methodology adapters so re-running only updates
+// existing cards rather than duplicating them. It bypasses policy gates (the
+// external source is authoritative for the item's state) but DOES validate the
+// column_key against the profile — an unknown column would place the card in no
+// view — and validates labels. Labels are fully replaced.
 func (s *Store) UpsertByExtKey(ctx context.Context, agentID string, it *board.Item) (*board.Item, error) {
 	if it.ExtKey == "" {
 		return nil, fmt.Errorf("UpsertByExtKey requires ext_key")

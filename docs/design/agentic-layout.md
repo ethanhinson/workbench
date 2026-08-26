@@ -76,23 +76,29 @@ A board carries one `layout` object (JSON). Shape:
 A `lanes` view needs `lanes` + `columns`; a `board` view needs `lanes`; `list` and
 `doc` need neither.
 
-## Placement — explicit tags, no Go logic
+## Placement — column-driven, no Go logic
 
-The renderer does **no** placement computation. Each item declares where it lives
-via labels the skill applies:
+The renderer does **no** placement computation beyond column ownership. Each item
+carries one real `column_key` (the board's profile lifecycle column); the layout
+decides how columns map to the UI:
 
-- **`view:<view-id>`** — which view(s) the item appears in (an item may carry more
-  than one, e.g. a build-ready change shows in both `inflight` and `specs`).
-- **`lane:<lane-key>`** — its swimlane within a `lanes`/`board` view.
-- **`column:<column-key>`** — its column within a `lanes` view.
+- **A view OWNS a set of columns** — `views.<id>.columns: [{key, label}]`, keyed to
+  real profile column_keys. An item's nav view is whichever view owns its
+  `column_key`.
+- **Within a lanes/board view, cards swimlane by their owned `column_key`** by
+  default (so a docket "In Flight" view owning `{in_progress, review}` shows those
+  two lanes for free). An optional `lanes:` axis buckets by `lane_key` instead, for
+  a 2-D column × lane grid.
+- **`group:<epic>`** is a glanceable chip (a change, plan, or type), never an axis.
 
-A view's `include` selects items by the tags it cares about (default:
-`view:<the view's id>`). The renderer buckets matching items by their `lane:` /
-`column:` tags into the view's declared lanes/columns. An item with no `lane:`
-tag falls into a synthesized "unassigned" lane so nothing is lost.
+Because placement is the item's real `column_key`, `item_move` — and the
+methodology adapters — write the exact field the renderer reads, so a move is
+instantly visible and the two can't drift. Each profile column is owned by at most
+one view (enforced by `board_set_layout`); an item whose column no view owns falls
+into an "unfiled" fallback so nothing is lost.
 
-This means the same board db, re-tagged, re-renders under any layout — the layout
-and the tags are the whole contract.
+This means the same board db re-renders under any layout — the layout's column
+ownership and the items' columns are the whole contract.
 
 ### Label taxonomy change
 
@@ -165,16 +171,17 @@ methodology skill or set_layout". Acceptable; keeps the model pure.)
 
 - **`board_set_layout`** `{ board_id, layout }` — validate and store the layout JSON
   on the board. Idempotent (replaces). Validation: every `nav[].view` must key into
-  `views`; every view `type` must be known; `lanes`/`columns` required for the types
-  that need them. Returns a summary.
+  `views`; every view `type` must be known; placement views must declare the
+  `columns` they own; and (against the profile) every owned column must be real and
+  singly-owned. Returns a summary.
 - **`board_get_layout`** `{ board_id }` — return the current layout (so a skill can
   read/tweak rather than reauthor).
-- **`item_upsert`** `{ board_id, ext_key, title, content?, labels?, spec_ref?,
-  kind?, … }` — the hydration primitive: create-or-update a card keyed by
-  `(board_id, ext_key)`. Carries `content` (the doc markdown) and placement labels
-  (`view:`/`lane:`/`column:`). Wraps the existing `store.UpsertByExtKey`, now
-  exposed to agents instead of only the (removed) docket Go importer. This is what
-  the methodology skills call as they work.
+- **`item_upsert`** `{ board_id, ext_key, title, content?, column?, labels?,
+  spec_ref?, kind?, … }` — the hydration primitive: create-or-update a card keyed by
+  `(board_id, ext_key)`. Carries `content` (the doc markdown) and its real `column`
+  (placement — a view owns columns, so the column decides the card's view + lane)
+  plus an optional `group:<epic>` chip. Wraps `store.UpsertByExtKey`. This is what
+  the methodology skills call as they work; the built-in adapters call the same path.
 - `item_create`/`item_label` still exist for ad-hoc, non-source-keyed cards (a
   live session board the agent invents). Both already accept `ns:value` labels, so
   tagging uses the calls a skill already knows.
@@ -231,15 +238,17 @@ Each `skills/kanban-<tool>/SKILL.md` teaches the agent to:
    - Superpowers: `docs/superpowers/specs/YYYY-MM-DD-*.md`, `docs/superpowers/plans/YYYY-MM-DD-*.md`, `.superpowers/` state.
    - Docket: `.docket/docs/changes/{active,archive}/NNNN-*.md`, `docs/adrs/`, `docs/specs/`.
 2. **`board_start`** a project-scoped board (project = the repo dir).
-3. **Design a tool-idiomatic layout** and `board_set_layout` it. Examples:
-   - OpenSpec → nav: `Proposals`(lanes: draft/approved), `Tasks`(lanes by change, columns from tasks.md checkbox state), `Specs`(doc), `Archive`(list).
-   - Superpowers → nav: `Plans`(list), `In Progress`(lanes by plan phase), `Specs`(doc), `Reviews`(list of review diffs).
-   - Docket → nav: `Backlog`(lanes by type), `In Flight`(lanes: spec/build/review), `ADRs`(doc), `Done`(list).
-4. **Hydrate via `item_upsert`** — for each artifact, `item_upsert` a card keyed by
-   `ext_key` (`openspec:<change>` etc.), carrying `content` = the file's markdown and
-   the `view:`/`lane:`/`column:` placement labels; `item_link` for deps. The skill
-   reads the file and passes its text — the server never opens it. Upsert makes this
-   idempotent, so re-running only updates.
+3. **Design a tool-idiomatic layout** and `board_set_layout` it — each view owns the
+   real profile columns it should show. Examples:
+   - OpenSpec → nav: `Proposals`(owns `todo`/`doing` as Draft/Approved), `Tasks`(owns `todo`/`doing`/`done`), `Specs`(doc), `Archive`(owns `done`).
+   - Superpowers → nav: `Plans`(owns `todo`), `In Progress`(owns `todo`/`doing`/`done`), `Specs`(doc), `Reviews`(owns `done`).
+   - Docket → nav: `Backlog`(owns `backlog`/`specifying`/`specd`), `In Flight`(owns `in_progress`/`review`), `Done`(owns `done`/`deferred`/`killed`).
+4. **Hydrate via `item_upsert`** (or the built-in adapters) — for each artifact,
+   `item_upsert` a card keyed by `ext_key` (`openspec:<change>` etc.), carrying
+   `content` = the file's markdown and its real `column` (which decides its view and
+   lane) plus a `group:<epic>` chip; `item_link` for deps. The skill reads the file
+   and passes its text — the server never opens it. Upsert makes this idempotent, so
+   re-running only updates.
 5. **Keep it live** — the skill's standing rhythm: *whenever the agent touches a
    methodology artifact during the session, `item_upsert` that card again.* The
    board stays as fresh as the work; no separate sync step.
