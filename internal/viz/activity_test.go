@@ -96,16 +96,16 @@ func TestActivityRoutesByProject(t *testing.T) {
 	}
 }
 
+// activityCount reports how many activity events landed on a board. Activity now
+// lives in the passive event log (off the item table), so it's counted via
+// ListActivity, never as board items.
 func activityCount(t *testing.T, st *store.Store, planID string) int {
 	t.Helper()
-	items, _ := st.ListItems(context.Background(), planID, store.Filter{})
-	n := 0
-	for _, it := range items {
-		if it.IsActivity() {
-			n++
-		}
+	acts, err := st.ListActivity(context.Background(), planID, 0)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return n
+	return len(acts)
 }
 
 func postJSON(t *testing.T, srv *httptest.Server, query, body string) {

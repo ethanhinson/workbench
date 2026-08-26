@@ -383,7 +383,7 @@ func TestPlanLayoutRoundTrip(t *testing.T) {
 	lo := board.Layout{
 		Nav: []board.NavItem{{ID: "done", Label: "Done", View: "done"}},
 		Views: map[string]board.LayoutView{
-			"done": {Type: board.ViewList},
+			"done": {Type: board.ViewList, Columns: []board.LayoutAxis{{Key: "done", Label: "Done"}}},
 		},
 	}
 	if err := st.SetPlanLayout(ctx, p.ID, lo); err != nil {

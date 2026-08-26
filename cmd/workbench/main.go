@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ethanhinson/workbench/internal/adapter"
 	"github.com/ethanhinson/workbench/internal/mcpserver"
 	"github.com/ethanhinson/workbench/internal/store"
 	"github.com/ethanhinson/workbench/internal/viz"
@@ -19,14 +20,22 @@ import (
 )
 
 func main() {
+	// `workbench init` is a one-command onboarding subcommand with its own flags and
+	// exit path — dispatch before the server flags are parsed.
+	if len(os.Args) > 1 && os.Args[1] == "init" {
+		runInit(os.Args[2:])
+		return
+	}
+
 	var (
-		dbPath   = flag.String("db", envOr("KANBAN_DB", "kanban.db"), "path to the SQLite plan database")
-		plan     = flag.String("plan", envOr("KANBAN_PLAN", ""), "board to focus as the viz default (create-or-select by name). Empty => agents create boards at runtime via board_start")
-		project  = flag.String("project", envOr("KANBAN_PROJECT", ""), "default project (a directory path) new boards belong to; empty => the working directory")
-		agent    = flag.String("agent", envOr("KANBAN_AGENT", "agent"), "calling agent id (its default swim lane)")
-		profile  = flag.String("profile", envOr("KANBAN_PROFILE", "sdd"), "methodology profile on first init: sdd|scrum|kanban")
-		httpAddr = flag.String("http", envOr("KANBAN_HTTP", ""), "serve the viz UI + JSON board API on this addr (e.g. :7777); empty disables")
-		vizOnly  = flag.Bool("viz-only", false, "run only the viz HTTP server (no MCP stdio) for browsing a board")
+		dbPath    = flag.String("db", envOr("KANBAN_DB", "kanban.db"), "path to the SQLite plan database")
+		plan      = flag.String("plan", envOr("KANBAN_PLAN", ""), "board to focus as the viz default (create-or-select by name). Empty => agents create boards at runtime via board_start")
+		project   = flag.String("project", envOr("KANBAN_PROJECT", ""), "default project (a directory path) new boards belong to; empty => the working directory")
+		agent     = flag.String("agent", envOr("KANBAN_AGENT", "agent"), "calling agent id (its default swim lane)")
+		profile   = flag.String("profile", envOr("KANBAN_PROFILE", "sdd"), "methodology profile on first init: sdd|scrum|kanban")
+		httpAddr  = flag.String("http", envOr("KANBAN_HTTP", ""), "serve the viz UI + JSON board API on this addr (e.g. :7777); empty disables")
+		vizOnly   = flag.Bool("viz-only", false, "run only the viz HTTP server (no MCP stdio) for browsing a board")
+		docketDir = flag.String("docket-dir", envOr("KANBAN_DOCKET_DIR", ""), "explicit docket changes dir; empty => auto-detect .docket/docs/changes under --project")
 	)
 	flag.Parse()
 
@@ -63,6 +72,20 @@ func main() {
 			log.Fatalf("select board %q: %v", *plan, err)
 		}
 		focusID = p.ID
+	}
+
+	// Docket adapter: deterministically project the repo's docket backlog onto a
+	// board and keep it live via a filesystem watch. Arms when a docket footprint is
+	// detected under the project (or --docket-dir is set). This replaces the old
+	// activity-feed sync — the change manifests are the source of truth. Runs before
+	// the --viz-only branch so a viz-only browser of a docket repo is live too.
+	if proj != "" {
+		if a, ok := adapter.Detect(proj); ok || *docketDir != "" {
+			if !ok {
+				a = adapter.NewDocketAdapter() // --docket-dir override without in-tree detection
+			}
+			focusID = armDocketAdapter(ctx, st, a, focusID, proj)
+		}
 	}
 
 	// Viz layer: the JSON board API + reference SPA. Serve it when --http is set,
@@ -126,6 +149,36 @@ func browseURL(addr string) string {
 		return "http://" + host
 	}
 	return "http://" + host + ":" + port
+}
+
+// armDocketAdapter ensures a docket board exists for the project, sets the
+// canonical docket layout, and starts the filesystem watch (which does an initial
+// sync). Returns the board id to focus (the passed focusID, or the newly
+// created/selected docket board when none was given).
+func armDocketAdapter(ctx context.Context, st *store.Store, a adapter.Adapter, focusID, proj string) string {
+	planID := focusID
+	if planID == "" {
+		p, err := st.CreatePlan(ctx, docketBoardName(proj), proj, "", a.Name())
+		if err != nil {
+			log.Printf("docket adapter: create board: %v", err)
+			return focusID
+		}
+		planID = p.ID
+	}
+	if err := st.SetPlanLayout(ctx, planID, adapter.DocketLayout()); err != nil {
+		log.Printf("docket adapter: set layout: %v", err)
+	}
+	go adapter.Watch(ctx, a, st, planID, proj, 0)
+	return planID
+}
+
+// docketBoardName is the conventional name for a project's docket board.
+func docketBoardName(proj string) string {
+	base := filepath.Base(strings.TrimRight(proj, "/"))
+	if base == "" || base == "." || base == "/" {
+		base = "project"
+	}
+	return base + ": docket backlog"
 }
 
 func envOr(key, def string) string {

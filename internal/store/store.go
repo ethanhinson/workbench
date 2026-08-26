@@ -385,6 +385,16 @@ func (s *Store) SetPlanLayout(ctx context.Context, planID string, lo board.Layou
 	if err := lo.Validate(); err != nil {
 		return err
 	}
+	// Column ownership must be checked against this board's real profile columns:
+	// every owned column must exist and belong to one view, so an item's derived
+	// nav view (from its column_key) is unambiguous.
+	cols, err := s.Columns(ctx, planID)
+	if err != nil {
+		return err
+	}
+	if _, err := lo.ValidateForProfile(cols); err != nil {
+		return err
+	}
 	raw, err := json.Marshal(lo)
 	if err != nil {
 		return err
@@ -461,7 +471,11 @@ func (s *Store) Snapshot(ctx context.Context, planID string) (board.Snapshot, er
 	if err != nil {
 		return board.Snapshot{}, err
 	}
-	return board.BuildSnapshot(*plan, layout, hasLayout, cols, lanes, items, links), nil
+	activity, err := s.ListActivity(ctx, planID, 0)
+	if err != nil {
+		return board.Snapshot{}, err
+	}
+	return board.BuildSnapshot(*plan, layout, hasLayout, cols, lanes, items, links, activity), nil
 }
 
 // ItemDetail assembles the full click-through detail for one item: the item (with
@@ -841,6 +855,48 @@ func (s *Store) ItemIDByExtKey(ctx context.Context, planID, extKey string) (stri
 	return id, true
 }
 
+// DeleteItem removes one item and its labels/links/events by id. Used by the
+// docket adapter's delete reconciliation: a change removed from disk should
+// vanish from the board, not linger. Deletes explicitly (labels first, then the
+// row) so it's correct even if foreign-key cascade is off, mirroring DeletePlan.
+func (s *Store) DeleteItem(ctx context.Context, planID, itemID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM label WHERE item_id=?`, itemID); err != nil {
+		return err
+	}
+	for _, table := range []string{"event", "link", "item"} {
+		var q string
+		switch table {
+		case "link":
+			q = `DELETE FROM link WHERE from_item=? OR to_item=?`
+			if _, err := tx.ExecContext(ctx, q, itemID, itemID); err != nil {
+				return fmt.Errorf("delete from link: %w", err)
+			}
+			continue
+		case "event":
+			q = `DELETE FROM event WHERE item_id=?`
+		case "item":
+			q = `DELETE FROM item WHERE id=? AND plan_id=?`
+			if _, err := tx.ExecContext(ctx, q, itemID, planID); err != nil {
+				return fmt.Errorf("delete from item: %w", err)
+			}
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, q, itemID); err != nil {
+			return fmt.Errorf("delete from %s: %w", table, err)
+		}
+	}
+	if err := s.commit(tx); err != nil {
+		return err
+	}
+	s.broker.notify()
+	return nil
+}
+
 // MoveItem changes an item's column (and optionally lane), enforcing WIP limits.
 func (s *Store) MoveItem(ctx context.Context, agentID, itemID, toColumn, toLane string) error {
 	planID, err := s.itemPlan(ctx, itemID)
@@ -1186,6 +1242,60 @@ func (s *Store) logEvent(ctx context.Context, planID, itemID, agentID, kind, det
 		`INSERT INTO event(id,plan_id,item_id,agent_id,kind,detail,at) VALUES(?,?,?,?,?,?,?)`,
 		newID(), planID, nullable(itemID), agentID, kind, detail, now())
 	return err
+}
+
+// activityEventKind is the reserved event.kind under which harness activity is
+// logged. It sits in the same event table as board events but carries no item_id
+// (activity is not tied to a card) and packs its fields into detail as JSON.
+const activityEventKind = "activity"
+
+// LogActivity records one harness activity event as a passive log row — off the
+// item table entirely, so it can never appear as a board card. The activity
+// fields are packed into event.detail as JSON; the feed reads them back via
+// ListActivity. It bumps the broker so a live feed re-pulls.
+func (s *Store) LogActivity(ctx context.Context, planID string, ev board.ActivityEntry) error {
+	detail, err := json.Marshal(ev)
+	if err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO event(id,plan_id,item_id,agent_id,kind,detail,at) VALUES(?,?,NULL,?,?,?,?)`,
+		newID(), planID, "", activityEventKind, string(detail), now()); err != nil {
+		return err
+	}
+	s.broker.notify()
+	return nil
+}
+
+// ListActivity returns the most recent activity events for a plan, newest first,
+// capped at limit (<=0 defaults to 200). The stored id/at from the event row are
+// authoritative and overwrite whatever the packed JSON carried.
+func (s *Store) ListActivity(ctx context.Context, planID string, limit int) ([]board.ActivityEntry, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, detail, at FROM event WHERE plan_id=? AND kind=? ORDER BY at DESC, id DESC LIMIT ?`,
+		planID, activityEventKind, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []board.ActivityEntry
+	for rows.Next() {
+		var id, detail, at string
+		if err := rows.Scan(&id, &detail, &at); err != nil {
+			return nil, err
+		}
+		var e board.ActivityEntry
+		if err := json.Unmarshal([]byte(detail), &e); err != nil {
+			continue // a malformed row never breaks the feed
+		}
+		e.ID = id
+		e.CreatedAt = at
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 // --- helpers ---

@@ -237,23 +237,35 @@ function boardQ(path){ return BOARD ? path+(path.includes("?")?"&":"?")+"board="
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 function itemById(id){ return (SNAP.items||[]).find(i=>i.id===id); }
 
-// ---- layout-driven placement: items carry view:/lane:/column: labels ----
+// ---- column-driven placement: item.column_key is the single source of truth ----
+// An item's nav view is whichever view OWNS its column_key (columnOwners); within a
+// view it swimlanes by column_key (or by lane_key when the view sets an explicit
+// lanes axis). There are no view:/lane:/column: placement labels anymore.
 function labelVal(it, ns){ const l=(it.labels||[]).find(x=>x.ns===ns); return l?l.value:""; }
-// Placement namespaces are internal routing the renderer already consumes (they
-// bucket the card into its view/lane/column and drive the group chip). Rendering
-// them again as drawer chips is pure noise that restates where the card already
-// visibly sits — so they're excluded from the informational label list.
-const PLACEMENT_NS = new Set(["view", "lane", "column", "group"]);
-function infoLabels(it){ return (it.labels||[]).filter(l => !PLACEMENT_NS.has(l.ns)); }
-// "task" and "p2" are the store's silent defaults (see UpsertByExtKey): the vast
-// majority of cards carry them, so rendering them is noise that says nothing. Show
-// kind/priority only when they DIVERGE from the default and thus actually inform.
+// group: is still a glanceable chip, not an axis, so it's hidden from the info list.
+// view/lane/column are LEGACY placement labels that older boards may still carry;
+// they no longer route anything, but we keep hiding them so stale labels don't
+// surface as drawer noise.
+const PLACEMENT_NS = new Set(["group"]);
+const LEGACY_PLACEMENT_NS = new Set(["view", "lane", "column"]);
+function infoLabels(it){ return (it.labels||[]).filter(l => !PLACEMENT_NS.has(l.ns) && !LEGACY_PLACEMENT_NS.has(l.ns)); }
+
+// columnOwners builds {column_key: navId} from the layout: each view owns the
+// columns it lists, so an item's view is a direct lookup on its column_key.
+function columnOwners(layout){
+  const owner = {};
+  for (const n of ((layout&&layout.nav)||[])){
+    const vd = (layout.views||{})[n.view] || {};
+    for (const c of (vd.columns||[])) owner[c.key] = n.id;
+  }
+  return owner;
+}
 function meaningfulKind(k){ return k && k !== "task" ? k : ""; }
 function meaningfulPriority(p){ return p && p !== "p2" ? p : ""; }
-// itemsForView returns the items whose view: label matches the view's include (default = the view id).
+// itemsForView returns the items whose column_key this view owns.
 function itemsForView(navId, viewDef){
-  const want = (viewDef.include && viewDef.include.view) ? viewDef.include.view : navId;
-  return (SNAP.items||[]).filter(i=>labelVal(i,"view")===want);
+  const owned = new Set((viewDef.columns||[]).map(c=>c.key));
+  return (SNAP.items||[]).filter(i => owned.has(i.column_key));
 }
 
 // dependency chips for a card (outgoing depends_on only, compact)
@@ -307,19 +319,31 @@ function card(it, groupBy){
 
 // ---- view renderers, chosen by view.type ----
 
-// LANES: columns × swimlanes grid. Items bucket by their lane:/column: labels.
-// Rendered as vertical swim lanes (each lane a column, cards stacked; the item's
-// column: label becomes a per-card status badge + within-lane sort key).
+// laneAxis returns the swim axis for a lanes/board view: the explicit lanes axis
+// (bucketed by item.lane_key) when the view declares one, else the view's owned
+// columns (bucketed by item.column_key). Returns {axes, keyOf} so the two
+// renderers share one bucketing rule. Column-driven is the default, which is what
+// makes item_move instantly visible — a moved card changes column_key and thus
+// jumps lanes with no label writes.
+function laneAxis(vd){
+  if (vd.lanes && vd.lanes.length){
+    return { axes: vd.lanes, keyOf: (it)=> it.lane_key || "_unassigned", allowUnassigned: true };
+  }
+  return { axes: vd.columns || [], keyOf: (it)=> it.column_key, allowUnassigned: false };
+}
+
+// LANES: vertical swim lanes. Cards bucket by column_key (default) or lane_key
+// (when the view sets an explicit lanes axis).
 function renderLanes(navId, vd){
   const items = itemsForView(navId, vd);
   const gb = vd.group_by || "group";
+  const { axes, keyOf, allowUnassigned } = laneAxis(vd);
   const byLane = {};
-  for (const it of items){ const k = labelVal(it,"lane") || "_unassigned"; (byLane[k] ||= []).push(it); }
-  // Sort within a lane by group (so cards of the same epic cluster), then title.
+  for (const it of items){ const k = keyOf(it) || "_unassigned"; (byLane[k] ||= []).push(it); }
   for (const k in byLane) byLane[k].sort((a,b)=> (labelVal(a,gb)||"~").localeCompare(labelVal(b,gb)||"~") || a.title.localeCompare(b.title));
 
-  const lanes = [...(vd.lanes||[])];
-  if (byLane["_unassigned"]) lanes.push({key:"_unassigned", label:"(unassigned)"});
+  const lanes = [...axes];
+  if (allowUnassigned && byLane["_unassigned"]) lanes.push({key:"_unassigned", label:"(unassigned)"});
   let html = `<div class="lanes">`;
   for (const lane of lanes){
     const list = byLane[lane.key]||[];
@@ -331,14 +355,16 @@ function renderLanes(navId, vd){
   return html + `</div>`;
 }
 
-// BOARD: vertical swimlanes only (no column axis).
+// BOARD: vertical swimlanes only — same bucketing as lanes (column_key default,
+// lane_key when an explicit lanes axis is set).
 function renderBoard(navId, vd){
   const items = itemsForView(navId, vd);
   const gb = vd.group_by || "group";
+  const { axes, keyOf, allowUnassigned } = laneAxis(vd);
   const byLane = {};
-  for (const it of items){ const k = labelVal(it,"lane") || "_unassigned"; (byLane[k] ||= []).push(it); }
-  const lanes = [...(vd.lanes||[])];
-  if (byLane["_unassigned"]) lanes.push({key:"_unassigned", label:"(unassigned)"});
+  for (const it of items){ const k = keyOf(it) || "_unassigned"; (byLane[k] ||= []).push(it); }
+  const lanes = [...axes];
+  if (allowUnassigned && byLane["_unassigned"]) lanes.push({key:"_unassigned", label:"(unassigned)"});
   let html = `<div class="lanes">`;
   for (const lane of lanes){
     const list = (byLane[lane.key]||[]).sort((a,b)=> (labelVal(a,gb)||"~").localeCompare(labelVal(b,gb)||"~") || a.title.localeCompare(b.title));
@@ -373,27 +399,24 @@ function listRow(it){
 }
 
 // FEED: a reverse-chronological activity stream. Unlike lanes/list (which model
-// staged work), a feed models a time-series — events that happened, newest first,
-// each stamped with a time. Built for the activity view: tool calls and subagent
-// lifecycle don't move through stages, they just occur in order. Rows carry the
-// group: label (the session) as a colored chip and the event body as sub-text.
+// staged work), a feed models a time-series. Activity lives in the passive event
+// log (SNAP.activity), not the item table, so a feed reads it directly — it is not
+// board work and never buckets into a lane. Entries are newest-first from the
+// store; each carries a category (tool/subagent/session) and a session chip.
 function renderFeed(navId, vd){
-  const items = itemsForView(navId, vd);
-  if (!items.length) return `<div class="empty">no activity yet</div>`;
-  // Newest first by created_at; fall back to position so ties stay stable.
-  const sorted = [...items].sort((a,b)=>
-    (b.created_at||"").localeCompare(a.created_at||"") || (b.position-a.position));
-  return `<div class="feed">${sorted.map(feedRow).join("")}</div>`;
+  const acts = SNAP.activity || [];
+  if (!acts.length) return `<div class="empty">no activity yet</div>`;
+  return `<div class="feed">${acts.map(feedRow).join("")}</div>`;
 }
-function feedRow(it){
-  const grp = labelVal(it, "group");           // the session chip lives in group:
-  const hue = grp ? groupHue(grp) : 210;
-  const cat = labelVal(it, "lane") || "event"; // tool | subagent | session
-  return `<div class="feedRow" onclick="openDrawer('${it.id}')">
-    <span class="fr-time">${esc(feedTime(it.created_at))}</span>
-    <span class="fr-dot" style="background:hsl(${hue} 60% 55%)" title="${esc(grp)}"></span>
+function feedRow(a){
+  const sess = a.session || "";
+  const hue = sess ? groupHue(sess) : 210;
+  const cat = a.category || "event"; // tool | subagent | session
+  return `<div class="feedRow">
+    <span class="fr-time">${esc(feedTime(a.created_at))}</span>
+    <span class="fr-dot" style="background:hsl(${hue} 60% 55%)" title="${esc(sess)}"></span>
     <span class="fr-cat ${esc(cat)}">${esc(cat)}</span>
-    <span class="fr-title">${esc(it.title)}</span>
+    <span class="fr-title">${esc(a.title)}</span>
   </div>`;
 }
 // feedTime renders an ISO timestamp as HH:MM:SS (local) for a compact log line.
@@ -479,33 +502,18 @@ function refRow(r){
 }
 function refLabel(r){ const m=/^#(\d+)/.exec(r.title); return m?"#"+m[1]:(r.ext_key||r.id.slice(0,6)); }
 
-// isActivity reports whether an item is an activity-feed event rather than a work
-// ticket. Activity events carry ticket-shaped defaults (kind:task, priority:p2,
-// spec:missing, column:backlog) that UpsertByExtKey stamps but which are
-// meaningless here — the drawer must not render them as chips.
-function isActivity(it){ return labelVal(it,"view")==="activity"; }
-
 function renderDrawer(d){
   const it = d.item;
   $("#drawer-title").textContent = it.title;
-  let h;
-  if (isActivity(it)){
-    // Activity events: a log entry, not a ticket. Show harness/session/time, not
-    // spec/priority/column. group: is the session; lane: is the category.
-    const sess = labelVal(it,"group"), cat = labelVal(it,"lane");
-    const meta = [cat, feedTime(it.created_at), sess?('session '+sess):""].filter(Boolean).join(" · ");
-    h = `<div class="kind">${esc(meta)}</div>`;
-    h += `<h2>${esc(it.title)}</h2>`;
-  } else {
-    // Meta line: only the parts that inform. kind/priority are dropped when they're
-    // the silent default (task/p2); column/lane orient you now that the board's
-    // visual placement is out of view.
-    const meta = [meaningfulKind(it.kind), meaningfulPriority(it.priority), it.column_key, it.lane_key].filter(Boolean).map(esc).join(" · ");
-    h = meta ? `<div class="kind">${meta}</div>` : "";
-    h += `<h2>${esc(it.title)}</h2>`;
-    h += `<div class="badges">${it.blocked?`<span class="badge blocked">blocked: ${esc(it.blocked_reason||'')}</span>`:''}`;
-    h += infoLabels(it).map(l=>`<span class="badge">${esc(l.ns)}:${esc(l.value)}</span>`).join("")+`</div>`;
-  }
+  // Meta line: only the parts that inform. kind/priority are dropped when they're
+  // the silent default (task/p2); column/lane orient you now that the board's
+  // visual placement is out of view. (Activity is a passive feed off the item
+  // table, so a drawer is always a work ticket.)
+  const meta = [meaningfulKind(it.kind), meaningfulPriority(it.priority), it.column_key, it.lane_key].filter(Boolean).map(esc).join(" · ");
+  let h = meta ? `<div class="kind">${meta}</div>` : "";
+  h += `<h2>${esc(it.title)}</h2>`;
+  h += `<div class="badges">${it.blocked?`<span class="badge blocked">blocked: ${esc(it.blocked_reason||'')}</span>`:''}`;
+  h += infoLabels(it).map(l=>`<span class="badge">${esc(l.ns)}:${esc(l.value)}</span>`).join("")+`</div>`;
 
   if (d.depends_on&&d.depends_on.length){ h+=`<div class="section-h">Depends on</div><div class="deplist">${d.depends_on.map(refRow).join("")}</div>`; }
   if (d.depended_by&&d.depended_by.length){ h+=`<div class="section-h">Blocks / depended on by</div><div class="deplist">${d.depended_by.map(refRow).join("")}</div>`; }

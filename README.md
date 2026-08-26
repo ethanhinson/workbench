@@ -117,11 +117,13 @@ declares the nav tabs and their views. A view is one of four types:
 - `board` vertical swim lanes only
 - `doc` a rendered-markdown reader over each card's `content`
 
-Placement is explicit labels. An item's `view:` label picks which nav view it
-appears in, `lane:` picks its status lane, and `group:` shows an epic or grouping (a
-change, a plan, a type) as a color-coded chip on the card. The renderer just buckets
-cards by their labels, so there is no placement logic in the server. A board with no
-layout renders an empty state until a skill or `board_set_layout` shapes it.
+Placement is column-driven. Each view *owns* a set of the board's real columns, and
+an item's nav view is derived from its `column_key` — so moving a card (via
+`item_move`, or a methodology adapter) instantly changes where it renders, with no
+separate labels to keep in sync. Within a lanes/board view, cards swimlane by their
+owned column by default. `group:` still shows an epic or grouping (a change, a plan,
+a type) as a color-coded chip. A board with no layout renders an empty state until a
+skill or `board_set_layout` shapes it.
 
 Content lives on the card, not the filesystem. The agent puts a spec or ADR's
 markdown into the item's `content` field, and the `doc` view renders it. The server

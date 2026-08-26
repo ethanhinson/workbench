@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ethanhinson/workbench/internal/adapter"
 	"github.com/ethanhinson/workbench/internal/board"
 	"github.com/ethanhinson/workbench/internal/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -199,6 +200,14 @@ func (s *Server) register(srv *mcp.Server) {
 			"columns, lanes, items, precomputed cell grid, stats). Feed this to a UI generator to render a " +
 			"custom visualization on demand, or to any external renderer.",
 	}, s.boardExport)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "docket_sync",
+		Description: "Re-project a repo's docket backlog (.docket/docs/changes) onto a board on demand. Reads " +
+			"every change manifest, deterministically maps each to a card (keyed docket:<id>) by its " +
+			"frontmatter, and reconciles deletes. Idempotent — safe to call repeatedly. Use when the " +
+			"filesystem watcher isn't running (e.g. a viz-less MCP session) and you want the board refreshed.",
+	}, s.docketSync)
 
 }
 
@@ -717,6 +726,31 @@ func (s *Server) defaultLane(plan *board.Plan) string {
 		return s.agentID
 	}
 	return "shared"
+}
+
+type docketSyncIn struct {
+	BoardID string `json:"board_id" jsonschema:"the board to sync onto (from board_start)"`
+	RepoDir string `json:"repo_dir,omitempty" jsonschema:"repo root containing .docket/docs/changes; defaults to the server's project"`
+}
+
+// docketSync re-projects a repo's docket backlog onto a board on demand.
+func (s *Server) docketSync(ctx context.Context, _ *mcp.CallToolRequest, in docketSyncIn) (*mcp.CallToolResult, itemOut, error) {
+	plan, err := s.resolveBoard(ctx, in.BoardID)
+	if err != nil {
+		return nil, itemOut{}, err
+	}
+	repo := in.RepoDir
+	if repo == "" {
+		repo = s.defaultProject
+	}
+	a, ok := adapter.Detect(repo)
+	if !ok {
+		return nil, itemOut{}, fmt.Errorf("no docket footprint under %q", repo)
+	}
+	if err := a.Sync(ctx, s.st, plan.ID, repo); err != nil {
+		return nil, itemOut{}, err
+	}
+	return nil, itemOut{ID: plan.ID, Message: fmt.Sprintf("docket synced onto %q", plan.Name)}, nil
 }
 
 // parseLabels turns "ns:value" strings into board.Label.

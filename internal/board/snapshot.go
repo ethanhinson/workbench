@@ -17,12 +17,31 @@ type Snapshot struct {
 	HasLayout     bool          `json:"has_layout"`
 	Columns       []ColumnDef   `json:"columns"` // underlying item columns (profile lifecycle)
 	Lanes         []Lane        `json:"lanes"`
-	Items         []Item        `json:"items"` // flat; placement is via each item's view:/lane:/column: labels
+	Items         []Item        `json:"items"` // flat; placement is via each item's column_key/lane_key
 	Links         []Link        `json:"links"`
-	Stats         SnapshotStats `json:"stats"`
+	// Activity is the passive harness event log (a session's tool-call feed),
+	// newest-first. It is NOT board work — it lives off the item table entirely, so
+	// it can never leak into a work view. A feed view renders it; everything else
+	// ignores it.
+	Activity []ActivityEntry `json:"activity"`
+	Stats    SnapshotStats   `json:"stats"`
 }
 
-const SnapshotSchemaVersion = 5
+// ActivityEntry is one harness activity event surfaced for a feed view. It is a
+// pure time-series row read from the event log, carrying no placement — a feed is
+// ordered by time, not bucketed into lanes.
+type ActivityEntry struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`             // the LCD event kind (tool_use_complete, subagent_start, …)
+	Category  string `json:"category"`         // tool | subagent | session
+	Title     string `json:"title"`            // "Bash — go test ./..."
+	Session   string `json:"session,omitempty"`
+	Harness   string `json:"harness,omitempty"`
+	Status    string `json:"status,omitempty"` // ok | error | ""
+	CreatedAt string `json:"created_at"`
+}
+
+const SnapshotSchemaVersion = 6
 
 // SnapshotPlan carries the methodology binding so a renderer can label the axes
 // correctly ("lane = agent" vs "lane = epic" vs "lane = class of service").
@@ -62,7 +81,7 @@ type SnapshotStats struct {
 // pure function (no store/db) means any caller — HTTP API, MCP tool, tests — can
 // produce the identical contract. layout/hasLayout come from the board; placement
 // is carried by the items' own labels, so there's no placement computation here.
-func BuildSnapshot(plan Plan, layout Layout, hasLayout bool, cols []ColumnDef, lanes []Lane, items []Item, links []Link) Snapshot {
+func BuildSnapshot(plan Plan, layout Layout, hasLayout bool, cols []ColumnDef, lanes []Lane, items []Item, links []Link, activity []ActivityEntry) Snapshot {
 	// Keep the layout's maps/slices non-nil so the JSON contract is always an
 	// object/array (never null), even for a board with no layout set.
 	if layout.Views == nil {
@@ -83,6 +102,10 @@ func BuildSnapshot(plan Plan, layout Layout, hasLayout bool, cols []ColumnDef, l
 		Lanes:     lanes,
 		Items:     items,
 		Links:     links,
+		Activity:  activity,
+	}
+	if snap.Activity == nil {
+		snap.Activity = []ActivityEntry{}
 	}
 	for _, it := range items {
 		// Activity-feed events are a session's tool-call log, not board work — keep
