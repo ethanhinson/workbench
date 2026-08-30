@@ -25,5 +25,5 @@ export function render(
   if (format === "json") {
     return JSON.stringify(envelope, null, 2);
   }
-  return encode(envelope as Record<string, unknown>);
+  return encode(envelope as unknown as Record<string, unknown>);
 }

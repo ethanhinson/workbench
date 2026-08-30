@@ -5,6 +5,10 @@ dist/
 *.tsbuildinfo
 npm-debug.log*
 pnpm-debug.log*
+# Stencil build outputs (components package)
+packages/components/loader/
+packages/components/www/
+packages/components/.stencil/
 
 /workbench
 /kanban-mcp

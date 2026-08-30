@@ -9,6 +9,11 @@ import {
   Host,
 } from "@stencil/core";
 import type { ChatMessage } from "../../models";
+import {
+  foldAgentChunk,
+  endAgentTurn as endAgentTurnLog,
+  appendUser,
+} from "./chat-log";
 
 /**
  * wb-chat — the chat experience for the prototyper's side panel.
@@ -47,24 +52,13 @@ export class WbChat {
   /** Append (or extend) the current streaming agent turn. */
   @Method()
   async appendAgentChunk(chunk: string): Promise<void> {
-    const last = this.log[this.log.length - 1];
-    if (last && last.role === "agent" && last.pending) {
-      this.log = [...this.log.slice(0, -1), { ...last, text: last.text + chunk }];
-    } else {
-      this.log = [
-        ...this.log,
-        { id: this.nextId("a"), role: "agent", text: chunk, pending: true },
-      ];
-    }
+    this.log = foldAgentChunk(this.log, chunk, () => this.nextId("a"));
   }
 
   /** Mark the current streaming agent turn complete. */
   @Method()
   async endAgentTurn(): Promise<void> {
-    const last = this.log[this.log.length - 1];
-    if (last && last.role === "agent" && last.pending) {
-      this.log = [...this.log.slice(0, -1), { ...last, pending: false }];
-    }
+    this.log = endAgentTurnLog(this.log);
   }
 
   private nextId(prefix: string): string {
@@ -75,7 +69,7 @@ export class WbChat {
   private send = () => {
     const text = this.draft.trim();
     if (!text || this.busy) return;
-    this.log = [...this.log, { id: this.nextId("u"), role: "user", text }];
+    this.log = appendUser(this.log, text, () => this.nextId("u"));
     this.draft = "";
     this.chatSend.emit({ text });
   };

@@ -68,7 +68,7 @@ export function createReviewServer(deps: ReviewServerDeps) {
       const result = await deps.pending.open(args.prototypeId);
       return {
         content: [{ type: "text", text: render(result, "toon") }],
-        structuredContent: result as Record<string, unknown>,
+        structuredContent: result as unknown as Record<string, unknown>,
       };
     },
   );

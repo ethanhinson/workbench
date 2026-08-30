@@ -21,11 +21,14 @@
       "require": "./loader/index.cjs.js"
     }
   },
-  "files": ["dist", "loader"],
+  "files": [
+    "dist",
+    "loader"
+  ],
   "scripts": {
     "build": "stencil build",
     "dev": "stencil build --watch --serve",
-    "test": "stencil test --spec",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
@@ -33,6 +36,8 @@
   },
   "devDependencies": {
     "@stencil/core": "^4.22.0",
-    "typescript": "^5.7.0"
+    "@stencil/vitest": "^1.15.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
   }
 }

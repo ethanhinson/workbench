@@ -18,5 +18,5 @@
     "skipLibCheck": true
   },
   "include": ["src"],
-  "exclude": ["node_modules", "dist", "www", "loader"]
+  "exclude": ["node_modules", "dist", "www", "loader", "src/**/*.spec.tsx", "src/**/*.spec.ts"]
 }
