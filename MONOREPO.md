@@ -8,15 +8,16 @@ TOON envelope foundation.
 workbench/
   package.json  pnpm-workspace.yaml  turbo.json  tsconfig.base.json
   apps/
-    server/         Go MCP server (module github.com/ethanhinson/workbench)
-                    — the existing v1 board server, moved verbatim from the root
-    review-bridge/  local bridge: browser <-> harness loop (TS)
+    server/       Go MCP server (module github.com/ethanhinson/workbench)
+                  — the existing v1 board server, moved verbatim from the root
   packages/
-    envelope/       @workbench/envelope — the TOON response/honesty contract
-    review-chrome/  in-house inspector + annotation + option-picker chrome
-    review-ui/      the 80/20 browser shell (prototype pane + chat pane)
-  docs/design/      agentic-layout.md, v2-toon-foundation-and-review.md
-  skills/           methodology skills (unchanged)
+    envelope/     @workbench/envelope — the TOON response/honesty contract
+    components/   @workbench/components — Stencil web components; first set:
+                  wb-chat (chat experience) + wb-annotation (prototyper)
+    adapters/     @workbench/adapters — harness adapters (codex/claude/cursor),
+                  one submodule per harness; import only the one you use
+  docs/design/    agentic-layout.md, v2-toon-foundation-and-review.md
+  skills/         methodology skills (unchanged)
 ```
 
 ## Working in it
@@ -39,14 +40,15 @@ module's location in the tree moved.
 - **envelope is the foundation.** Every agent-facing tool renders the same
   honesty contract (coverage, staleness, aggregates, provenance). See
   `packages/envelope/README.md`.
-- **The browser review tool is the first consumer.** Agent renders an HTML
-  prototype; a human clicks/annotates/picks options; structured feedback flows
-  back into the running agent turn as an envelope. See
-  `docs/design/v2-toon-foundation-and-review.md`.
-- **One core, many harnesses.** The browser + bridge is harness-neutral; a thin
-  adapter (codex / claude / cursor) is the only per-harness code.
+- **components are reusable, framework-free.** Stencil web components with real
+  props/state/events architecture. The first set is the prototyper's chat
+  experience (`wb-chat`) and annotation surface (`wb-annotation`); they emit
+  events the adapter folds into an envelope and never talk to a harness.
+- **One core, many harnesses.** The components are harness-neutral; a per-harness
+  adapter (`@workbench/adapters/{codex,claude,cursor}`) is the only harness-specific
+  code, and each is import-isolated so a consumer pulls only what it uses.
 
-Status: **scaffold.** `packages/envelope` has real code + tests; the
-review-* packages and the bridge are structured placeholders with their
-contracts sketched. See the design doc for open questions and the cheapest
+Status: **scaffold.** `packages/envelope` and `packages/components` have real
+code + tests; `packages/adapters` defines the neutral `HarnessAdapter` interface
+with per-harness stubs. See the design doc for open questions and the cheapest
 falsifying gate before further build.

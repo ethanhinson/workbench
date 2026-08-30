@@ -1,0 +1,39 @@
+{
+  "name": "@workbench/adapters",
+  "version": "0.0.0",
+  "description": "Harness adapters: the per-harness code that pushes structured feedback into a running agent turn. One neutral interface, one submodule per harness (codex/claude/cursor) — import only the one you use.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./codex": {
+      "types": "./dist/codex/index.d.ts",
+      "import": "./dist/codex/index.js"
+    },
+    "./claude": {
+      "types": "./dist/claude/index.d.ts",
+      "import": "./dist/claude/index.js"
+    },
+    "./cursor": {
+      "types": "./dist/cursor/index.d.ts",
+      "import": "./dist/cursor/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@workbench/envelope": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

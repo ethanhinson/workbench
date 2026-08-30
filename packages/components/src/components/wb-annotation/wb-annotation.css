@@ -1,0 +1,71 @@
+:host {
+  display: block;
+  font-family: var(--wb-font, system-ui, sans-serif);
+  --wb-border: var(--wb-annotation-border, #d0d0d7);
+  --wb-accent: var(--wb-accent, #3b5bdb);
+}
+
+.card {
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  padding: 0.5rem 0.625rem;
+  background: var(--wb-annotation-bg, #fff);
+}
+
+.selector {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--wb-muted, #6a6a76);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 0.375rem;
+}
+
+.note {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
+.empty {
+  color: var(--wb-muted, #9a9aa4);
+  font-style: italic;
+}
+
+.input {
+  width: 100%;
+  min-height: 3rem;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.375rem;
+  border: 1px solid var(--wb-border);
+  border-radius: 6px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.actions {
+  display: flex;
+  gap: 0.375rem;
+}
+
+button {
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--wb-border);
+  border-radius: 6px;
+  background: #f6f6f8;
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--wb-accent);
+  border-color: var(--wb-accent);
+  color: #fff;
+}
+
+button.danger {
+  color: #c92a2a;
+}

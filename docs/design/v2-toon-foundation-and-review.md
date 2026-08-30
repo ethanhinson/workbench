@@ -5,6 +5,18 @@
 proposes a shared **foundation layer** and its **first consumer**, a browser-based
 prototype/mock review loop.
 
+> **Package-name reconciliation (post-scaffold).** This doc predates the final
+> package split. Concepts map to packages as follows:
+> - the envelope → `packages/envelope` (`@workbench/envelope`)
+> - the "chrome" / browser UI components → `packages/components` (`@workbench/components`;
+>   first components `wb-chat`, `wb-annotation`) — built with Stencil web components
+> - the harness-specific side of the "bridge" → `packages/adapters`
+>   (`@workbench/adapters/{codex,claude,cursor}`)
+>
+> "Bridge" below refers to the *runtime role* (serve the prototype, push feedback into
+> the turn); its reusable part is the adapters package. There is no standalone bridge app
+> yet — libraries only.
+
 ---
 
 ## 0. Thesis in one paragraph
