@@ -1,4 +1,6 @@
 # Workbench v2 monorepo workspaces.
 # apps/server is the existing Go MCP server (not a JS package — excluded here).
+# apps/prototyper is the runnable TS review-loop app.
 packages:
   - "packages/*"
+  - "apps/prototyper"

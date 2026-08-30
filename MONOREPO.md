@@ -10,6 +10,9 @@ workbench/
   apps/
     server/       Go MCP server (module github.com/ethanhinson/workbench)
                   — the existing v1 board server, moved verbatim from the root
+    prototyper/   @workbench/prototyper — v1 runnable review loop (HTTP+WS).
+                  Wires an adapter to the browser shell; `--fake` mode drives the
+                  loop with no live harness, which is the end-to-end test.
   packages/
     envelope/     @workbench/envelope — the TOON response/honesty contract
     components/   @workbench/components — Stencil web components; first set:

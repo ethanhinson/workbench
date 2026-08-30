@@ -19,7 +19,9 @@
       "types": "./loader/index.d.ts",
       "import": "./loader/index.js",
       "require": "./loader/index.cjs.js"
-    }
+    },
+    "./dist/*": "./dist/*",
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",

@@ -1,0 +1,30 @@
+{
+  "name": "@workbench/prototyper",
+  "version": "0.0.0",
+  "private": true,
+  "description": "v1 prototyper: the runnable end-to-end review loop. An agent presents an HTML prototype, a human reviews it in the browser (chat + annotations), and feedback resolves the running turn. Doubles as the integration test of envelope + components + adapters.",
+  "type": "module",
+  "main": "./dist/server.js",
+  "bin": {
+    "prototyper": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/cli.js",
+    "dev": "node --watch dist/cli.js --fake",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@workbench/adapters": "workspace:*",
+    "@workbench/components": "workspace:*",
+    "@workbench/envelope": "workspace:*",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
