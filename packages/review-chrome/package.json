@@ -1,0 +1,27 @@
+{
+  "name": "@workbench/review-chrome",
+  "version": "0.0.0",
+  "description": "The in-house chrome injected OVER an agent-authored prototype: element inspector, annotation attach, and option-picker. Talks only to the bridge — harness-agnostic.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@workbench/envelope": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

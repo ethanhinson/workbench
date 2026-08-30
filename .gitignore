@@ -1,3 +1,11 @@
+# --- Node / Turborepo (v2 monorepo) ---
+node_modules/
+dist/
+.turbo/
+*.tsbuildinfo
+npm-debug.log*
+pnpm-debug.log*
+
 /workbench
 /kanban-mcp
 *.db

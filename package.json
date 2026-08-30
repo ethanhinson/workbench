@@ -1,0 +1,23 @@
+{
+  "name": "workbench-monorepo",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Workbench v2 monorepo: agent-ergonomic tooling on a shared TOON envelope foundation.",
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "dev": "turbo run dev"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0",
+    "vitest": "^3.0.0"
+  }
+}
