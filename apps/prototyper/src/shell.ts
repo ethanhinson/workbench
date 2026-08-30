@@ -47,7 +47,7 @@ export function shellHtml(): string {
       <div id="annList"></div>
     </div>
     <wb-chat id="chat" placeholder="Message the agent…"></wb-chat>
-    <div id="bar"><button id="submit">Submit review</button></div>
+    <div id="bar"><span id="chosen" style="flex:1;font-size:.75rem;color:#3b5bdb;align-self:center"></span><button id="submit">Submit review</button></div>
   </div>
 </div>
 <script type="module">
@@ -70,47 +70,68 @@ export function shellHtml(): string {
     fetch("/chat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: e.detail.text }) });
   });
 
+  let frame = null;
+  let chosen = null;
+
   function loadPrototype() {
     protoEl.classList.remove("empty");
     protoEl.innerHTML = "";
-    const iframe = document.createElement("iframe");
-    iframe.setAttribute("sandbox", "allow-scripts allow-forms");
-    iframe.src = "/prototype?" + Date.now();
-    protoEl.appendChild(iframe);
-    wireInspector(iframe);
+    frame = document.createElement("iframe");
+    frame.setAttribute("sandbox", "allow-scripts allow-forms");
+    frame.src = "/prototype?" + Date.now();
+    frame.onload = () => sendInspect();
+    protoEl.appendChild(frame);
   }
 
-  // --- click-to-annotate (parent-side; the iframe is sandboxed/cross-doc so we
-  //     annotate at the iframe level for v1: a real inspector needs an injected
-  //     agent inside the frame via postMessage — deferred) ---
-  function wireInspector() {
-    protoEl.onclick = (e) => {
-      if (!inspectToggle.checked) return;
-      const note = prompt("Annotation:");
-      if (note == null) return;
-      const id = "n" + (++seq);
-      const selector = "iframe/prototype";
-      const box = [Math.round(e.offsetX), Math.round(e.offsetY), 0, 0].join(",");
-      annotations.push({ id, selector, box, note });
-      const el = document.createElement("wb-annotation");
-      el.setAttribute("annotation-id", id);
-      el.setAttribute("selector", selector);
-      el.setAttribute("box", box);
-      el.setAttribute("note", note);
-      el.addEventListener("annotationRemove", () => {
-        const i = annotations.findIndex((a) => a.id === id);
-        if (i >= 0) annotations.splice(i, 1);
-        el.remove();
-      });
-      annList.appendChild(el);
-    };
+  // Forward inspect-mode into the in-frame inspector.
+  function sendInspect() {
+    frame?.contentWindow?.postMessage(
+      { source: "wb-inspector", type: "set-inspect", value: inspectToggle.checked },
+      "*",
+    );
+  }
+  inspectToggle.addEventListener("change", sendInspect);
+
+  // --- receive selections from the in-frame inspector (real selectors) ---
+  window.addEventListener("message", (ev) => {
+    const d = ev.data;
+    if (!d || d.source !== "wb-inspector") return;
+    if (d.type === "select") addAnnotation(d.selector, d.box, d.label);
+    else if (d.type === "option") setChosen(d.option);
+  });
+
+  function addAnnotation(selector, box, label) {
+    const note = prompt("Annotation for " + selector + (label ? " (“" + label + "”)" : "") + ":");
+    if (note == null) return;
+    const id = "n" + (++seq);
+    annotations.push({ id, selector, box, note });
+    const el = document.createElement("wb-annotation");
+    el.setAttribute("annotation-id", id);
+    el.setAttribute("selector", selector);
+    el.setAttribute("box", box || "");
+    el.setAttribute("note", note);
+    el.addEventListener("annotationRemove", () => {
+      const i = annotations.findIndex((a) => a.id === id);
+      if (i >= 0) annotations.splice(i, 1);
+      el.remove();
+    });
+    el.addEventListener("annotationCommit", (e) => {
+      const a = annotations.find((a) => a.id === id);
+      if (a) a.note = e.detail.note;
+    });
+    annList.appendChild(el);
+  }
+
+  function setChosen(option) {
+    chosen = option;
+    document.getElementById("chosen").textContent = option ? "chosen: " + option : "";
   }
 
   document.getElementById("submit").onclick = async () => {
     await fetch("/review", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ annotations, coverage: "complete" }),
+      body: JSON.stringify({ annotations, chosen, coverage: "complete" }),
     });
   };
 </script>

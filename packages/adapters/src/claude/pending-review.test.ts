@@ -16,9 +16,17 @@ describe("PendingReview", () => {
     expect(pr.isWaiting).toBe(false);
   });
 
-  it("submit with no outstanding review returns false", () => {
+  it("buffers a submission that races ahead of open(), delivering it on the next open()", async () => {
     const pr = new PendingReview();
-    expect(pr.submit(ok({}))).toBe(false);
+    // Feedback arrives during the present_prototype -> request_review gap.
+    const early = ok({ chosen: "early" });
+    expect(pr.submit(early)).toBe(true);
+    expect(pr.hasBuffered).toBe(true);
+    expect(pr.isWaiting).toBe(false);
+
+    // When the agent finally opens the review, it resolves immediately.
+    await expect(pr.open("proto-1")).resolves.toEqual(early);
+    expect(pr.hasBuffered).toBe(false);
   });
 
   it("opening a second review cancels the first", async () => {

@@ -69,12 +69,9 @@ export class ClaudeAdapter implements HarnessAdapter {
   }
 
   async submitFeedback(feedback: Envelope): Promise<void> {
-    // Unblocks the awaiting request_review tool call. If nothing is waiting the
-    // POST was stray — surface that to the caller so it can 404.
-    const delivered = this.pending.submit(feedback);
-    if (!delivered) {
-      throw new Error("no review is awaiting feedback");
-    }
+    // Unblocks the awaiting request_review call, or buffers the feedback if it
+    // raced ahead of the agent opening the review (the present->request gap).
+    this.pending.submit(feedback);
   }
 
   async stop(): Promise<void> {

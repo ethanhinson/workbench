@@ -6,6 +6,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { ok } from "@workbench/envelope";
 import type { HarnessAdapter, PrototypePresentation } from "@workbench/adapters";
 import { shellHtml } from "./shell.js";
+import { injectInspector } from "./inspector.js";
 
 /** Resolve the built @workbench/components bundle dir (dist/workbench-components). */
 function componentsDir(): string {
@@ -79,7 +80,7 @@ export async function startPrototyperServer(opts: {
         return;
       }
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(currentPrototype.html);
+      res.end(injectInspector(currentPrototype.html));
       return;
     }
 
@@ -150,8 +151,15 @@ export async function startPrototyperServer(opts: {
   const port = typeof addr === "object" && addr ? addr.port : opts.port;
   const url = `http://${host}:${port}`;
 
-  // Kick off the first turn (agent presents a prototype).
-  await opts.adapter.start(opts.prompt);
+  // Kick off the first turn WITHOUT awaiting it: the turn will call
+  // request_review, which blocks until the browser POSTs feedback to this
+  // server — so the server must already be accepting requests. Awaiting start()
+  // here would deadlock (turn waits for a review the un-returned server can't
+  // receive). Turn failures are surfaced over the chat channel.
+  void opts.adapter.start(opts.prompt).catch((err) => {
+    broadcast({ type: "chat", chunk: `\n[turn error: ${String(err)}]\n` });
+    broadcast({ type: "turn-end" });
+  });
 
   return {
     server,

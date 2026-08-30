@@ -36,20 +36,37 @@ export class ReviewCancelledError extends Error {
  */
 export class PendingReview {
   private current: Pending | undefined;
+  /**
+   * A feedback submission that arrived before the agent opened its review — the
+   * present_prototype → request_review gap is a real window. Buffered so the
+   * next open() consumes it immediately instead of dropping it.
+   */
+  private buffered: ReviewResult | undefined;
 
   /** True while the agent is blocked waiting on human feedback. */
   get isWaiting(): boolean {
     return this.current !== undefined;
   }
 
+  /** True when a submission is buffered awaiting the next open(). */
+  get hasBuffered(): boolean {
+    return this.buffered !== undefined;
+  }
+
   /**
    * Open a review for `prototype` and return a promise the MCP tool awaits.
-   * Cancels any review already outstanding.
+   * If feedback was already submitted (raced ahead of the agent), resolve
+   * immediately with it. Cancels any review already outstanding.
    */
   open(prototype: string): Promise<ReviewResult> {
     if (this.current) {
       this.current.reject(new ReviewCancelledError("superseded by a new review"));
       this.current = undefined;
+    }
+    if (this.buffered !== undefined) {
+      const result = this.buffered;
+      this.buffered = undefined;
+      return Promise.resolve(result);
     }
     return new Promise<ReviewResult>((resolve, reject) => {
       this.current = { resolve, reject, prototype };
@@ -57,11 +74,15 @@ export class PendingReview {
   }
 
   /**
-   * Deliver the human's feedback, unblocking the awaiting tool call. Returns
-   * false if no review was outstanding (a stray POST) so the caller can 404.
+   * Deliver the human's feedback, unblocking the awaiting tool call. If no
+   * review is open yet, buffer it for the next open() (the request arrived
+   * during the present→request gap) and report success.
    */
   submit(result: ReviewResult): boolean {
-    if (!this.current) return false;
+    if (!this.current) {
+      this.buffered = result;
+      return true;
+    }
     const { resolve } = this.current;
     this.current = undefined;
     resolve(result);
