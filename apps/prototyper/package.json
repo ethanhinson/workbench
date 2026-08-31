@@ -5,6 +5,13 @@
   "description": "v1 prototyper: the runnable end-to-end review loop. An agent presents an HTML prototype, a human reviews it in the browser (chat + annotations), and feedback resolves the running turn. Doubles as the integration test of envelope + components + adapters.",
   "type": "module",
   "main": "./dist/server.js",
+  "types": "./dist/server.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    }
+  },
   "bin": {
     "prototyper": "./dist/cli.js"
   },

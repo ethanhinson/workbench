@@ -1,0 +1,28 @@
+{
+  "name": "@workbench/prototyper-mcp",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The prototyper as an MCP server: the agent you're already talking to gets prototype_present / prototype_review tools. On first present it boots a browser viewer; review flows back to that agent. This is the real product shape.",
+  "type": "module",
+  "bin": {
+    "prototyper-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@workbench/adapters": "workspace:*",
+    "@workbench/envelope": "workspace:*",
+    "@workbench/prototyper": "workspace:*",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

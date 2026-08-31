@@ -49,6 +49,34 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)
 
+  apps/prototyper-mcp:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.30.0
+        version: 1.30.0(zod@4.5.4)
+      '@workbench/adapters':
+        specifier: workspace:*
+        version: link:../../packages/adapters
+      '@workbench/envelope':
+        specifier: workspace:*
+        version: link:../../packages/envelope
+      '@workbench/prototyper':
+        specifier: workspace:*
+        version: link:../prototyper
+      zod:
+        specifier: ^4.0.0
+        version: 4.5.4
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)
+
   packages/adapters:
     dependencies:
       '@workbench/envelope':
