@@ -27,6 +27,8 @@ interface WsTap {
   chatText(): string;
   chatAfter(marker: number): string;
   markCount(): number;
+  /** Distinct prototype ids presented so far, in order. */
+  prototypeIds(): string[];
   close(): void;
 }
 
@@ -40,6 +42,11 @@ function tapWs(httpUrl: string): WsTap {
     chatAfter: (marker) =>
       events.slice(marker).filter((e) => e.type === "chat").map((e) => e.chunk).join(""),
     markCount: () => events.length,
+    prototypeIds: () => [
+      ...new Set(
+        events.filter((e) => e.type === "prototype" && e.id).map((e) => e.id as string),
+      ),
+    ],
     close: () => ws.close(),
   };
 }
@@ -109,6 +116,85 @@ describe.skipIf(!LIVE)("LIVE prototyper loop (real Claude)", () => {
         expect(reaction.length).toBeGreaterThan(0);
         // It acted on the feedback: references the Save button / primary action.
         expect(reaction).toMatch(/save|primary|contrast|button/);
+
+        tap.close();
+      } finally {
+        await server?.close();
+      }
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "iterates across rounds: review → revised prototype → review",
+    async () => {
+      const adapter = await createRealAdapter({ reviewTimeoutMs: 120_000 });
+      let server: PrototyperServer | undefined;
+      try {
+        server = await startPrototyperServer({
+          adapter,
+          prompt:
+            "Propose a settings page with Save and Cancel. Present ONE prototype, " +
+            "request review, then iterate on the feedback across rounds.",
+          port: 0,
+        });
+        const tap = tapWs(server.url);
+
+        const htmlById = new Map<string, string>();
+        const reviewed = new Set<string>();
+
+        // Drive up to 3 rounds: whenever a NEW prototype appears, capture its
+        // HTML and submit a review. The first two rounds request a concrete
+        // change (forcing a revision); once we have 2 distinct prototypes we
+        // send an approving/empty review so the agent can wrap up.
+        const collectRounds = async (): Promise<void> => {
+          const deadline = Date.now() + 150_000;
+          while (Date.now() < deadline) {
+            const ids = tap.prototypeIds();
+            for (const id of ids) {
+              if (reviewed.has(id)) continue;
+              // Give request_review a beat to open (buffered if it races).
+              await wait(1500);
+              const html = await (await fetch(`${server!.url}/prototype`)).text();
+              htmlById.set(id, html);
+              reviewed.add(id);
+
+              const done = htmlById.size >= 2;
+              await fetch(`${server!.url}/review`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(
+                  done
+                    ? { chosen: null, coverage: "complete", annotations: [] }
+                    : {
+                        chosen: null,
+                        coverage: "complete",
+                        annotations: [
+                          {
+                            id: `r${htmlById.size}`,
+                            selector: "#save",
+                            box: "0,0,60,30",
+                            note: "Make the Save button larger and clearly primary.",
+                          },
+                        ],
+                      },
+                ),
+              });
+            }
+            if (htmlById.size >= 2 && tap.events.some((e) => e.type === "turn-end")) return;
+            await wait(500);
+          }
+        };
+        await collectRounds();
+
+        const ids = tap.prototypeIds();
+        // At least two DISTINCT prototypes were presented across rounds.
+        expect(ids.length).toBeGreaterThanOrEqual(2);
+        // The revision actually differs from the first prototype.
+        const [first, second] = ids;
+        expect(htmlById.get(first!)).toBeDefined();
+        expect(htmlById.get(second!)).toBeDefined();
+        expect(htmlById.get(second!)).not.toBe(htmlById.get(first!));
 
         tap.close();
       } finally {

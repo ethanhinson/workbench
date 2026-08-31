@@ -18,8 +18,10 @@ export const PROTOTYPER_SYSTEM_PROMPT = [
   "2. Immediately call request_review(prototypeId). It BLOCKS until the human",
   "   finishes reviewing; it returns their chosen option, annotations (with CSS",
   "   selectors), and coverage as structured data.",
-  "3. Act on that feedback — acknowledge each annotation and say what you would",
-  "   change, then either present a revised prototype or summarize.",
+  "3. Act on that feedback. When it asks for changes, present a REVISED prototype",
+  "   (a NEW id, e.g. name-v2) that addresses each annotation, then call",
+  "   request_review again — keep iterating round after round until the human",
+  "   signals they are done (an empty/approving review) or asks you to stop.",
   "",
   "Keep chat concise; the prototype is the artifact, not the text.",
 ].join("\n");
