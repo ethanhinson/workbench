@@ -24,6 +24,8 @@ export interface PrototypePresentation {
 
 /** Callbacks the browser/bridge layer registers on an adapter. */
 export interface AdapterHandlers {
+  /** A turn started (the agent is now working). */
+  onTurnStart?: () => void;
   /** Streamed assistant chat text (feeds wb-chat). */
   onChat?: (chunk: string) => void;
   /** The agent presented a prototype; serve it to the browser. */

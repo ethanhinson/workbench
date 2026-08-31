@@ -81,6 +81,7 @@ export class ClaudeAdapter implements HarnessAdapter {
   /** Drive one query() turn to completion, streaming and wiring MCP. */
   private async runTurn(prompt: string): Promise<void> {
     this.turnActive = true;
+    this.handlers.onTurnStart?.();
     const reviewServer = createReviewServer({
       pending: this.pending,
       reviewTimeoutMs: this.options.reviewTimeoutMs,

@@ -28,7 +28,10 @@ export function shellHtml(): string {
   }
   #side { flex: 0 0 20%; min-width: 300px; display: flex; flex-direction: column; }
   #ann { flex: 0 0 auto; max-height: 40%; overflow-y: auto; padding: 0.5rem; border-bottom: 1px solid #d0d0d7; }
-  #ann h3 { font-size: 0.75rem; text-transform: uppercase; color: #6a6a76; margin: 0.25rem 0.25rem 0.5rem; }
+  #ann h3 { font-size: 0.75rem; text-transform: uppercase; color: #6a6a76; margin: 0.25rem 0.25rem 0.5rem; display:flex; justify-content:space-between; align-items:center; }
+  #status { font-weight: normal; text-transform: none; font-size: 0.7rem; }
+  #status.busy { color: #e8590c; }
+  #status.ready { color: #2f9e44; }
   wb-annotation { margin-bottom: 0.4rem; }
   #chat { flex: 1 1 auto; min-height: 0; }
   #bar { flex: 0 0 auto; display: flex; gap: 0.4rem; padding: 0.5rem; border-top: 1px solid #d0d0d7; }
@@ -42,7 +45,7 @@ export function shellHtml(): string {
   <div id="proto" class="empty"></div>
   <div id="side">
     <div id="ann">
-      <h3>Annotations</h3>
+      <h3>Annotations <span id="status" class="ready">○ ready</span></h3>
       <label id="inspect"><input type="checkbox" id="inspectToggle" /> click prototype to annotate</label>
       <div id="annList"></div>
     </div>
@@ -62,10 +65,17 @@ export function shellHtml(): string {
   const ws = new WebSocket(\`ws://\${location.host}/ws\`);
   ws.onmessage = async (ev) => {
     const msg = JSON.parse(ev.data);
-    if (msg.type === "chat") await chat.appendAgentChunk(msg.chunk);
-    else if (msg.type === "turn-end") await chat.endAgentTurn();
+    if (msg.type === "turn-start") setBusy(true);
+    else if (msg.type === "chat") await chat.appendAgentChunk(msg.chunk);
+    else if (msg.type === "turn-end") { await chat.endAgentTurn(); setBusy(false); }
     else if (msg.type === "prototype") loadPrototype();
   };
+
+  function setBusy(b) {
+    chat.busy = b;
+    const s = document.getElementById("status");
+    if (s) { s.textContent = b ? "● agent working…" : "○ ready"; s.className = b ? "busy" : "ready"; }
+  }
   chat.addEventListener("chatSend", (e) => {
     fetch("/chat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: e.detail.text }) });
   });

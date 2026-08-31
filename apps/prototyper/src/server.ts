@@ -50,6 +50,7 @@ export async function startPrototyperServer(opts: {
   };
 
   opts.adapter.on({
+    onTurnStart: () => broadcast({ type: "turn-start" }),
     onChat: (chunk) => broadcast({ type: "chat", chunk }),
     onPrototype: (proto) => {
       currentPrototype = proto;

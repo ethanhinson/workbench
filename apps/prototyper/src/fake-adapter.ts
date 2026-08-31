@@ -23,6 +23,7 @@ export class FakeAdapter implements HarnessAdapter {
   }
 
   async start(prompt: string): Promise<void> {
+    this.handlers.onTurnStart?.();
     this.emitChat(`Here is a prototype for: ${prompt}\n`);
     this.handlers.onPrototype?.({ id: "fake-1", html: this.prototypeHtml });
     this.emitChat("Click elements to annotate, then submit your review.");
@@ -30,6 +31,7 @@ export class FakeAdapter implements HarnessAdapter {
   }
 
   async sendChat(text: string): Promise<void> {
+    this.handlers.onTurnStart?.();
     this.emitChat(`(echo) ${text}`);
     this.handlers.onTurnEnd?.();
   }
