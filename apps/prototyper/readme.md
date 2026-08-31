@@ -39,11 +39,26 @@ Harness-agnostic: the `HarnessAdapter` is the only harness-specific piece. The
 `FakeAdapter` implements it deterministically so `pnpm test` proves the loop
 without a live agent.
 
-## Status / v1 limits
+## Live end-to-end test
+
+`src/live.test.ts` drives the **complete loop against a real `claude`** and
+asserts: the agent presents a prototype (served, inspector injected), chat
+streams over the WS, the review POST unblocks `request_review`, and the agent
+**reacts to the feedback** after the review before the turn ends. It uses
+`createRealAdapter` — the exact code path the CLI's real mode uses.
+
+Opt-in only (skipped in CI, no key needed to keep CI green):
+
+```sh
+WB_LIVE=1 pnpm --filter @workbench/prototyper test
+```
+
+## Status / limits
 
 - The prototype is framed in a **sandboxed iframe** (`allow-scripts allow-forms`);
-  agent JS can't reach the parent. Because the frame is cross-document, v1
-  annotates at the iframe level (click → note). A true in-frame element inspector
-  needs an injected agent inside the frame over `postMessage` — deferred.
+  agent JS can't reach the parent. An in-frame inspector script (injected by the
+  server) does hover-highlight + click-select on **real elements** and posts the
+  selector/box to the parent over `postMessage` — see `inspector.ts`.
 - Real-mode Claude uses the blocking-review MCP tool; see
-  `@workbench/adapters/claude`.
+  `@workbench/adapters/claude`. Feedback that races ahead of `request_review` is
+  buffered, so the loop is order-independent.
