@@ -1,5 +1,6 @@
 import type { Envelope } from "@workbench/envelope";
 import type { AdapterHandlers, HarnessAdapter } from "@workbench/adapters";
+import { chainHandlers } from "@workbench/adapters";
 
 /**
  * A deterministic stand-in for a real harness. It presents a canned prototype
@@ -19,7 +20,7 @@ export class FakeAdapter implements HarnessAdapter {
   constructor(private readonly prototypeHtml: string) {}
 
   on(handlers: AdapterHandlers): void {
-    this.handlers = { ...this.handlers, ...handlers };
+    this.handlers = chainHandlers(this.handlers, handlers);
   }
 
   async start(prompt: string): Promise<void> {

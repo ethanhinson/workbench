@@ -6,3 +6,6 @@ export type {
   AdapterHandlers,
   PrototypePresentation,
 } from "./adapter.js";
+// A value (composes handlers so multiple observers can register). Node builtins
+// only — safe to include in the type-only-ish root without pulling any SDK.
+export { chainHandlers } from "./adapter.js";

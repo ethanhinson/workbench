@@ -5,6 +5,7 @@ import type {
   HarnessAdapter,
   PrototypePresentation,
 } from "../adapter.js";
+import { chainHandlers } from "../adapter.js";
 import { PendingReview } from "./pending-review.js";
 import {
   createReviewServer,
@@ -51,7 +52,7 @@ export class ClaudeAdapter implements HarnessAdapter {
   }
 
   on(handlers: AdapterHandlers): void {
-    this.handlers = { ...this.handlers, ...handlers };
+    this.handlers = chainHandlers(this.handlers, handlers);
   }
 
   async start(prompt: string): Promise<void> {

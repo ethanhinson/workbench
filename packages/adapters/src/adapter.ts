@@ -34,6 +34,33 @@ export interface AdapterHandlers {
   onTurnEnd?: () => void;
 }
 
+/**
+ * Compose two handler sets so BOTH run for each event, in order (existing first,
+ * then added). This lets multiple observers register via on() — e.g. a terminal
+ * logger and the WS broadcaster — without the later on() overwriting the earlier.
+ */
+export function chainHandlers(
+  a: AdapterHandlers,
+  b: AdapterHandlers,
+): AdapterHandlers {
+  const both = <T extends unknown[]>(
+    fa: ((...args: T) => void) | undefined,
+    fb: ((...args: T) => void) | undefined,
+  ): ((...args: T) => void) | undefined => {
+    if (fa && fb) return (...args: T) => {
+      fa(...args);
+      fb(...args);
+    };
+    return fb ?? fa;
+  };
+  return {
+    onTurnStart: both(a.onTurnStart, b.onTurnStart),
+    onChat: both(a.onChat, b.onChat),
+    onPrototype: both(a.onPrototype, b.onPrototype),
+    onTurnEnd: both(a.onTurnEnd, b.onTurnEnd),
+  };
+}
+
 export interface HarnessAdapter {
   /** Adapter id, e.g. "codex" | "claude" | "cursor". */
   readonly id: string;
